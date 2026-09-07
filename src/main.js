@@ -10,6 +10,7 @@ import { loadSettings, saveSettings } from "./storage.js";
 import { AGE, AGE_IDS, getAgePref, setAgePref, matchAge } from "./age.js";
 import { primeVoice, speakLine, setVoiceEnabled } from "./voice.js";
 import { lineFor, COOLDOWN } from "./commentary.js";
+import { celebrate } from "./confetti.js";
 import { HOWTO } from "./voicePhrases.js";
 
 const $ = (id) => document.getElementById(id);
@@ -346,7 +347,13 @@ game.onHud = (hud) => {
     ui.surfaceText.textContent = hud.surface === "road" ? "在馬路上" : `在${hud.surfaceLabel}上`;
     ui.distText.textContent = String(hud.distance);
     ui.blockText.textContent = `${hud.blocks}/${hud.totalBlocks}`;
-    if (hud.blocks !== lastBlocks) { lastBlocks = hud.blocks; speakEvent("blocks", { blocks: hud.blocks, total: hud.totalBlocks }); }
+    if (hud.blocks !== lastBlocks) {
+      const first = lastBlocks >= 0;
+      lastBlocks = hud.blocks;
+      speakEvent("blocks", { blocks: hud.blocks, total: hud.totalBlocks });
+      // 逛遍整座城 = 這一站唯一的「破關」時刻,值得一陣彩帶
+      if (first && hud.blocks >= hud.totalBlocks) celebrate({ count: 200, duration: 3000, origin: "top" });
+    }
     ui.speedText.textContent = String(hud.speedKmh);
     ui.turboLabel.textContent = `⚡ ${v.boostLabel}`;
     ui.turboFill.style.transform = `scaleX(${Math.max(0, Math.min(1, hud.turbo)).toFixed(3)})`;
