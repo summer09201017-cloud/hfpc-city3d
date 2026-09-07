@@ -1,6 +1,6 @@
 // 📲 簡易 SW(baseball3d 家族範式):全部 network-first、斷網退 cache。
 // ★ 殼層(index.html / manifest / icon / sw 自己)有改就 bump 這個號碼(static-pwa-ship 鐵則)。
-const CACHE = "city3d-v1a";  // v1a 2026-09-08:人物修正(安全帽/脖子/頭位置/內裝可見性)
+const CACHE = "city3d-v2";   // v2 2026-09-08:第二期① 地圖放大 9×9 + 下車走路 + 路人有頭髮脖子
 self.addEventListener("install", () => { self.skipWaiting(); });
 self.addEventListener("activate", (e) => {
   e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))));

@@ -21,7 +21,7 @@ const ui = {
   speedPanel: $("speedPanel"), speedText: $("speedText"), turboRow: $("turboRow"), turboFill: $("turboFill"), turboLabel: $("turboLabel"), speedHint: $("speedHint"),
   statusMessage: $("statusMessage"), vehicleBar: $("vehicleBar"),
   tLeft: $("tLeft"), tRight: $("tRight"), tGas: $("tGas"), tBrake: $("tBrake"), tBoost: $("tBoost"),
-  menuButton: $("menuButton"), audioButton: $("audioButton"), cameraButton: $("cameraButton"), helpButton: $("helpButton"), fsButton: $("fsButton"),
+  menuButton: $("menuButton"), audioButton: $("audioButton"), cameraButton: $("cameraButton"), helpButton: $("helpButton"), fsButton: $("fsButton"), footButton: $("footButton"),
   helpOverlay: $("helpOverlay"), helpCloseButton: $("helpCloseButton"), helpSpeakButton: $("helpSpeakButton"),
   homeScreen: $("homeScreen"), vehicleSelect: $("vehicleSelect"), colorSelect: $("colorSelect"), speedSelect: $("speedSelect"),
   pedSelect: $("pedSelect"), audioSelect: $("audioSelect"), vehicleHint: $("vehicleHint"), startButton: $("startButton"),
@@ -246,6 +246,8 @@ ui.startButton.addEventListener("click", startDrive);
 const toMenu = () => { sendDone(); ui.homeScreen.classList.add("visible"); ui.helpOverlay.classList.remove("visible"); game.backToMenu(); };
 ui.menuButton.addEventListener("click", toMenu);
 ui.cameraButton.addEventListener("click", () => { game.cycleCamView(); audio.uiTap(); });
+function toggleFoot() { game.toggleFoot(); audio.uiTap(); }
+ui.footButton.addEventListener("click", toggleFoot);
 function openHelp() { ui.helpOverlay.classList.add("visible"); }
 function closeHelp() { ui.helpOverlay.classList.remove("visible"); }
 ui.helpButton.addEventListener("click", openHelp);
@@ -264,6 +266,7 @@ addEventListener("keydown", (e) => {
   if (k === "Escape") { if (ui.helpOverlay.classList.contains("visible")) closeHelp(); else if (game.phase !== "menu") toMenu(); return; }
   if (k === "h" || k === "H") { ui.helpOverlay.classList.contains("visible") ? closeHelp() : openHelp(); return; }
   if (k === "v" || k === "V") { game.cycleCamView(); audio.uiTap(); return; }
+  if (k === "f" || k === "F") { toggleFoot(); return; }
   if (k >= "1" && k <= "5") { const id = VEHICLE_IDS[Number(k) - 1]; if (id) switchVehicle(id); return; }
   if (PREVENT.has(c)) e.preventDefault();
   codes.add(c);
@@ -329,10 +332,19 @@ function drawMini(hud) {
   c.drawImage(miniBase, 0, 0);
   c.fillStyle = "rgba(255,255,255,0.75)";
   for (const p of hud.peds) { const [x, y] = miniXY(p.x, p.z); c.fillRect(x - 0.8, y - 0.8, 1.6, 1.6); }
+  // 🅿 停在原地的載具:走遠了要找得回來,不然「下車」等於把車弄丟
+  if (hud.parked) {
+    const [px, py] = miniXY(hud.parked.x, hud.parked.z);
+    c.fillStyle = "#ffd479"; c.strokeStyle = "#3a2c10"; c.lineWidth = 1.5;
+    c.beginPath(); c.arc(px, py, 5, 0, Math.PI * 2); c.fill(); c.stroke();
+    c.fillStyle = "#3a2c10"; c.font = "bold 7px system-ui"; c.textAlign = "center"; c.textBaseline = "middle";
+    c.fillText("P", px, py + 0.5);
+    c.textAlign = "start"; c.textBaseline = "alphabetic";
+  }
   const [cx, cy] = miniXY(hud.car.x, hud.car.z);
-  c.fillStyle = "#" + CAR_COLORS[settings.colorIdx].hex.toString(16).padStart(6, "0");
-  c.strokeStyle = "#fff"; c.lineWidth = 2;
-  c.beginPath(); c.arc(cx, cy, 4.5, 0, Math.PI * 2); c.fill(); c.stroke();
+  c.fillStyle = hud.onFoot ? "#ffffff" : "#" + CAR_COLORS[settings.colorIdx].hex.toString(16).padStart(6, "0");
+  c.strokeStyle = hud.onFoot ? "#1e88e5" : "#fff"; c.lineWidth = 2;
+  c.beginPath(); c.arc(cx, cy, hud.onFoot ? 3.5 : 4.5, 0, Math.PI * 2); c.fill(); c.stroke();
 }
 
 /* ── HUD ── */
@@ -343,7 +355,11 @@ game.onHud = (hud) => {
   ui.tripCard.hidden = !driving; ui.miniWrap.hidden = !driving; ui.speedPanel.hidden = !driving; ui.vehicleBar.hidden = !driving;
   if (driving) {
     const v = VEHICLES[hud.vehicle] || VEHICLES.car;
-    ui.vehicleText.textContent = `${v.emoji} ${v.label}`;
+    // 走路是「暫時離開載具」的狀態,不是第六種載具 ⇒ HUD 直接說走路,快捷列灰掉
+    ui.vehicleText.textContent = hud.onFoot ? "🚶 走路" : `${v.emoji} ${v.label}`;
+    ui.footButton.textContent = hud.onFoot ? (hud.canMount ? "🚗 上車" : "🚶 走路中") : "🚶 下車";
+    ui.footButton.classList.toggle("on", !!hud.onFoot);
+    ui.vehicleBar.classList.toggle("dimmed", !!hud.onFoot);
     ui.surfaceText.textContent = hud.surface === "road" ? "在馬路上" : `在${hud.surfaceLabel}上`;
     ui.distText.textContent = String(hud.distance);
     ui.blockText.textContent = `${hud.blocks}/${hud.totalBlocks}`;
@@ -355,7 +371,7 @@ game.onHud = (hud) => {
       if (first && hud.blocks >= hud.totalBlocks) celebrate({ count: 200, duration: 3000, origin: "top" });
     }
     ui.speedText.textContent = String(hud.speedKmh);
-    ui.turboLabel.textContent = `⚡ ${v.boostLabel}`;
+    ui.turboLabel.textContent = hud.onFoot ? "⚡ 小跑步" : `⚡ ${v.boostLabel}`;
     ui.turboFill.style.transform = `scaleX(${Math.max(0, Math.min(1, hud.turbo)).toFixed(3)})`;
     ui.turboRow.classList.toggle("tired", !!hud.tired);
     ui.turboRow.classList.toggle("boosting", !!hud.boosting);

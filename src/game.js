@@ -8,7 +8,7 @@
 // ★ 沿用 racing3d 的鐵則:this.running 只給 RAF;mesh.visible 一律嚴格 boolean;鏡頭狀態建構子就有數字。
 import * as THREE from "three";
 import { CITY, SURFACES, worldSize, blockCenter, roadCenter, isPlaza, isPark, buildBuildings, buildPedestrians, stepPedestrians, surfaceAt, nearestRoadPoint, PED } from "./city.js";
-import { CAR, DIFFICULTY, createCar, placeAt, stepCar, emptyInput, resolveCollisions, rpm01, kmh, clamp, wrapAngle, forwardOf } from "./vehicle.js";
+import { CAR, DIFFICULTY, createCar, placeAt, stepCar, emptyInput, resolveCollisions, rpm01, kmh, clamp, wrapAngle, forwardOf, rightOf } from "./vehicle.js";
 import { VEHICLES, VEHICLE_IDS, vehicleParams } from "./vehicles.js";
 import { makeCarRig, makeMotoRig, makeHorseRig, makeHoverRig, makeRunnerRig } from "./rigs.js";
 
@@ -18,6 +18,25 @@ export { CITY, SURFACES, VEHICLES, VEHICLE_IDS, DIFFICULTY };
 export const CAM_VIEWS = ["chase", "hood", "cockpit", "bird", "shoulder"];
 export const CAM_LABELS = { chase: "追尾跟隨", hood: "車頭", cockpit: "駕駛座", bird: "高空俯瞰", shoulder: "過肩" };
 export const CAM_KEY = "city3d-camview";
+
+/* 🚶 下車走路(第二期):走路不是第六種載具,是「暫時離開載具」的狀態 ——
+   車停在原地等你回來,走遠了要自己走回去(小地圖會標停車點)。
+   ★ 走路的快慢**不吃難度檔**:幼幼檔的孩子也是用同樣的速度走路,不然「下車」變成另一個難度旋鈕。 */
+export const WALK_CFG = { id: "walk", label: "走路", maxSpeed: 2.6, accel: 9, grip: 12, assist: 0, aiMax: 0, aiLatAcc: 0, aiSkill: 0, aiBoost: 0 };
+export const WALK = {
+  reach: 4.5,        // 離停放的載具幾公尺內按得到「上車」
+  dropSide: 1.9,     // 下車時人出現在載具左側幾公尺(不要生在車體裡)
+};
+/** 走路的車體參數:轉得比誰都快、身體最窄、草地完全不減速;渦輪=小跑步。 */
+export const WALK_PARAMS = {
+  ...CAR, accelMul: 1, gripMul: 1,
+  turnRate: CAR.turnRate * 1.9, steerFullSpeed: 1.2, highSpeedFalloff: 60,
+  width: 0.55, length: 0.55, wheelRadius: 0.9,
+  grassSpeedMul: 1, grassDrag: 0, slipGain: 0.12, handbrakeGrip: 6,
+  boostSpeedMul: 2.1, boostAccel: 4.5, turboBurn: 0.3, turboRegen: 0.12,
+  reverseMax: 1.2, brake: 9, roll: 1.6, drag: 0.02,
+  straightAccel: 1, cornerGrip: 1,
+};
 
 export const CAR_COLORS = [
   { id: "red", label: "烈焰紅", hex: 0xe53935 },
@@ -53,6 +72,8 @@ export class CityGame {
     this.visited = new Set();       // 逛過哪些街廓
     this.pedBumps = 0;
 
+    this.onFoot = false;            // 現在是不是用兩條腿(下車走路)
+    this.parked = null;             // 停在原地的載具 { vehicle, x, z, heading, rig }
     this.buildings = buildBuildings();
     this.peds = buildPedestrians();
     // 驗收要用:廣場/公園的中心座標(使用者點名「能穿越廣場」,測試得知道廣場在哪)
@@ -205,23 +226,38 @@ export class CityGame {
   /** 行人:矮圓柱身體 + 頭 + 兩隻手(遠看是人,近看不恐怖);撞不傷,所以不做倒地動畫。 */
   _buildPedMeshes(scene) {
     const shirts = [0xe05c4a, 0x4a86e0, 0x4ac07a, 0xe0b44a, 0x9a6be0, 0xe07ac0];
+    const HAIR = [0x2b2118, 0x4a3527, 0x1d1a17, 0x6b4a2b, 0x3a2c22, 0x8a6a3f];   // 髮色六款(配 shirt 索引,決定性)
     const skin = lambert(0xf1c9a5);
     this.pedMeshes = [];
     for (const p of this.peds) {
       const g = new THREE.Group();
+      // ★ 上半身(軀幹+脖子+頭+頭髮+五官)包成一組一起上下擺:
+      //   只讓 body 擺、頭不動的話,走路時頭會跟身體分家(加了脖子之後特別明顯)。
+      const upper = new THREE.Group(); g.add(upper);
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.75, 0.28), lambert(shirts[p.shirt % shirts.length]));
-      body.position.y = 0.95; g.add(body);
+      body.position.y = 0.95; upper.add(body);
       const legs = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.6, 0.26), lambert(0x394a63));
       legs.position.y = 0.35; g.add(legs);
+      // 脖子(0908:騎士補了脖子,滿街路人卻還是「頭直接坐在肩膀上」)
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.16, 8), skin);
+      neck.position.y = 1.35; upper.add(neck);
       const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 8), skin);
-      head.position.y = 1.5; g.add(head);
+      head.position.y = 1.53; upper.add(head);
+      // 頭髮:上半球 + 後腦片(原本整顆頭是光的膚色球,從後面看最明顯——路人是滿街從各種角度看的)
+      const hairMat = lambert(HAIR[p.shirt % HAIR.length]);
+      const hair = new THREE.Mesh(new THREE.SphereGeometry(0.198, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), hairMat);
+      hair.position.y = 1.55; hair.scale.set(1, 1.05, 1.04); upper.add(hair);
+      const nape = new THREE.Mesh(new THREE.SphereGeometry(0.198, 12, 8, Math.PI * 1.5 - 1.266, 2.532, Math.PI / 2 - 0.03, 0.6), hairMat);
+      nape.position.y = 1.55; nape.scale.set(1, 1.05, 1.04); upper.add(nape);
       for (const sx of [-1, 1]) {
         const eye = new THREE.Mesh(new THREE.SphereGeometry(0.032, 6, 6), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-        eye.position.set(sx * 0.06, 1.53, 0.16); g.add(eye);
+        eye.position.set(sx * 0.06, 1.56, 0.16); upper.add(eye);
+        const ear = new THREE.Mesh(new THREE.SphereGeometry(0.034, 6, 6), skin);
+        ear.position.set(sx * 0.185, 1.55, -0.015); ear.scale.set(0.6, 1.1, 1); upper.add(ear);
       }
       g.position.set(p.x, 0, p.z);
       scene.add(g);
-      this.pedMeshes.push({ g, body });
+      this.pedMeshes.push({ g, body, upper });
     }
   }
 
@@ -252,8 +288,83 @@ export class CityGame {
     this._syncRig(0);
   }
 
+  /* ─────────────── 🚶 下車走路(第二期) ─────────────── */
+
+  /** 現在按得到「上車」嗎(走路中 + 有停放的載具 + 走得夠近)。 */
+  canMount() {
+    if (!this.onFoot || !this.parked || !this.player) return false;
+    return Math.hypot(this.player.x - this.parked.x, this.player.z - this.parked.z) <= WALK.reach;
+  }
+
+  /** 離停放的載具還有幾公尺(不在走路狀態回 0)。 */
+  distToParked() {
+    if (!this.onFoot || !this.parked || !this.player) return 0;
+    return Math.hypot(this.player.x - this.parked.x, this.player.z - this.parked.z);
+  }
+
+  /** 下車 / 上車一鍵切換(F)。回傳切換後是不是在走路。 */
+  toggleFoot() {
+    if (this.phase !== "driving") return this.onFoot;
+    return this.onFoot ? this._mount() : this._dismount();
+  }
+
+  _dismount() {
+    const car = this.player;
+    if (!car) return false;
+    // 載具留在原地:rig 不從場景移除,只是不再跟著玩家動
+    this.parked = { vehicle: this.settings.vehicle, x: car.x, z: car.z, heading: car.heading, rig: this.rig };
+    this.rig.group.position.set(car.x, 0, car.z);
+    this.rig.group.rotation.y = car.heading;
+    if (this.rig.flame) this.rig.flame.visible = false;
+    for (const m of this.rig.hide) m.visible = true;          // 停著的車要看得見(不管剛才是不是駕駛座視角)
+    if (this.rig.cockpit) this.rig.cockpit.visible = false;
+
+    // 人站到載具左側(不要生在車體裡)
+    const right = rightOf(car.heading);
+    const px = car.x - right.x * WALK.dropSide, pz = car.z - right.z * WALK.dropSide;
+    this.rig = makeRunnerRig(CAR_COLORS[this.settings.colorIdx % CAR_COLORS.length].hex, { interior: false });
+    this.scene.add(this.rig.group);
+    const walker = createCar({ isPlayer: true, vehicle: "run", params: WALK_PARAMS, colorIdx: this.settings.colorIdx });
+    placeAt(walker, px, pz, car.heading);
+    this.player = walker;
+    this.onFoot = true;
+    this.cam.snap = true;
+    if (this.cam.view === "cockpit") this.setCamView("chase");   // 走路沒有駕駛座
+    this.say(`🚶 下車了 —— ${VEHICLES[this.parked.vehicle].emoji} 在原地等你,走回來按 F 上車`, 3.5);
+    this._emit("dismount", { vehicle: this.parked.vehicle });
+    this._syncRig(0);
+    this.pushHud();
+    return true;
+  }
+
+  _mount() {
+    if (!this.parked) return false;
+    if (!this.canMount()) {
+      const d = Math.round(this.distToParked());
+      this.say(`${VEHICLES[this.parked.vehicle].emoji} 還在 ${d} 公尺外,走近一點再按 F`, 2.5);
+      return true;
+    }
+    this.scene.remove(this.rig.group);          // 收掉步行者
+    const p = this.parked;
+    this.rig = p.rig;
+    this.settings.vehicle = p.vehicle;
+    const car = createCar({ isPlayer: true, vehicle: p.vehicle, params: vehicleParams(p.vehicle), colorIdx: this.settings.colorIdx });
+    placeAt(car, p.x, p.z, p.heading);
+    this.player = car;
+    this.parked = null;
+    this.onFoot = false;
+    this.cam.snap = true;
+    this.say(`上車了 —— ${VEHICLES[p.vehicle].emoji} ${VEHICLES[p.vehicle].label}`, 2);
+    this._emit("mount", { vehicle: p.vehicle });
+    this._syncRig(0);
+    this.pushHud();
+    return false;
+  }
+
   /** 換載具:停在原地換,不用回選單(使用者要的「自由切換」)。 */
   setVehicle(id) {
+    // 走路中不能換載具:車停在別的地方,換了會把停放的那台弄丟
+    if (this.onFoot) { this.say("🚶 走路中不能換載具 —— 先走回去按 F 上車", 2.5); return this.settings.vehicle; }
     const v = VEHICLES[id] ? id : "car";
     if (v === this.settings.vehicle) return v;
     this.settings.vehicle = v;
@@ -288,8 +399,23 @@ export class CityGame {
   }
   stop() { this.running = false; }
 
-  beginDrive() { this.phase = "driving"; this.distance = 0; this.pedBumps = 0; this.visited.clear(); this.say("想去哪就去哪 —— 人行道、廣場、公園都能開", 4); this.pushHud(); }
-  backToMenu() { this.phase = "menu"; this.pushHud(); }
+  beginDrive() {
+    this._clearFoot();
+    this.phase = "driving"; this.distance = 0; this.pedBumps = 0; this.visited.clear();
+    this.say("想去哪就去哪 —— 人行道、廣場、公園都能開,按 F 可以下車走走", 4);
+    this.pushHud();
+  }
+  backToMenu() { this._clearFoot(); this.phase = "menu"; this.pushHud(); }
+
+  /** 回到「坐在載具上」的乾淨狀態:收掉步行者、把停放的那台還原成玩家車。 */
+  _clearFoot() {
+    if (!this.onFoot) return;
+    if (this.rig) this.scene.remove(this.rig.group);      // 步行者
+    if (this.parked && this.parked.rig) this.scene.remove(this.parked.rig.group);
+    this.onFoot = false; this.parked = null;
+    this.rig = null; this.player = null;
+    this._spawnPlayer();
+  }
 
   resize(width, height) {
     this._vw = Math.max(1, width | 0); this._vh = Math.max(1, height | 0);
@@ -304,7 +430,7 @@ export class CityGame {
     dt = Math.min(dt, 1 / 20);
     this.time += dt;
     if (this.messageT > 0) { this.messageT -= dt; if (this.messageT <= 0) this.message = ""; }
-    const cfg = DIFFICULTY[this.settings.speed] || DIFFICULTY.easy;
+    const cfg = this.onFoot ? WALK_CFG : (DIFFICULTY[this.settings.speed] || DIFFICULTY.easy);
     const car = this.player;
     if (car) {
       const before = { x: car.x, z: car.z };
@@ -411,7 +537,7 @@ export class CityGame {
       m.g.rotation.y = p.dir;
       // 走路上下擺(逃跑時快一點);撞到只是往旁邊跳,不倒地
       const bob = Math.sin(this.time * (p.flee > 0 ? 14 : 7) + i) * 0.05;
-      m.body.position.y = 0.95 + Math.abs(bob);
+      m.upper.position.y = Math.abs(bob);
     }
   }
 
@@ -507,7 +633,7 @@ export class CityGame {
 
   hud() {
     const p = this.player;
-    const cfg = DIFFICULTY[this.settings.speed] || DIFFICULTY.easy;
+    const cfg = this.onFoot ? WALK_CFG : (DIFFICULTY[this.settings.speed] || DIFFICULTY.easy);
     const su = p ? (SURFACES[p.surface] || SURFACES.road) : SURFACES.road;
     return {
       phase: this.phase,
@@ -515,8 +641,11 @@ export class CityGame {
       rpm: p ? rpm01(p.speed, cfg.maxSpeed) : 0,
       turbo: p ? p.turbo : 1, tired: !!(p && p.tired), boosting: !!(p && p.boosting),
       surface: su.id, surfaceLabel: su.label,
-      vehicle: this.settings.vehicle,
-      vehicleLabel: VEHICLES[this.settings.vehicle] ? VEHICLES[this.settings.vehicle].label : "",
+      vehicle: this.onFoot ? "walk" : this.settings.vehicle,
+      vehicleLabel: this.onFoot ? "走路" : (VEHICLES[this.settings.vehicle] ? VEHICLES[this.settings.vehicle].label : ""),
+      onFoot: this.onFoot,
+      parked: this.parked ? { x: this.parked.x, z: this.parked.z, vehicle: this.parked.vehicle, label: VEHICLES[this.parked.vehicle].label, emoji: VEHICLES[this.parked.vehicle].emoji } : null,
+      canMount: this.canMount(),
       camView: this.cam.view, camLabel: CAM_LABELS[this.cam.view],
       distance: Math.round(this.distance),
       blocks: this.visited.size, totalBlocks: CITY.cols * CITY.rows,

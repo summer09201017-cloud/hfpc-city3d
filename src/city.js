@@ -8,12 +8,13 @@
 //   世界座標原點在都市中心,x 往東、z 往南。
 
 export const CITY = {
-  cols: 6, rows: 6,          // 街廓數
+  cols: 9, rows: 9,          // 街廓數(0908 使用者「地圖再大一些」:6×6=456m 見方 → 9×9=684m,面積 2.25 倍)
   block: 60,                 // 街廓邊長(含人行道)
   road: 16,                  // 街道總寬(雙向)
   walk: 5,                   // 人行道寬(街廓外圈)
-  plazas: [[2, 2], [4, 1]],  // 哪幾格是廣場(整格鋪面、沒有建築)
-  parks: [[1, 4], [4, 4]],   // 哪幾格是公園(草地 + 樹,可以開進去但很慢)
+  // 廣場與公園要**散開**:擠在一起等於只有一個大空地,而且遠端整片都是同樣的樓會迷路
+  plazas: [[4, 4], [1, 2], [7, 1], [2, 7], [6, 6]],   // 整格鋪面、沒有建築(中央那格是市中心大廣場)
+  parks: [[1, 6], [6, 2], [3, 1], [8, 5], [4, 8]],    // 草地 + 樹,開得進去但很慢
 };
 
 /* 地面材質:速度倍率 + 額外減速(車體層直接吃這兩個值)。
@@ -104,27 +105,29 @@ export function buildBuildings(seed = 20260907) {
     for (let c = 0; c < CITY.cols; c++) {
       if (isPlaza(c, r) || isPark(c, r)) continue;
       const center = blockCenter(c, r);
-      const n = 1 + Math.floor(rnd() * 3);    // 1~3 棟
-      const placed = [];
+      // ★ 象限配置:把 50×50 的建築基地切成 2×2 四個象限,每棟挑一個**沒被用過的**象限。
+      //   這樣天生不重疊,不必再做碰撞重試——上一版用「隨機擺 + gap 檢查、最多試 8 次」,
+      //   但 ox 只能晃 ±5m 而兩棟半寬加起來就要 29m ⇒ 第二棟幾乎永遠試不進去,
+      //   整座城變成每格剛好一棟(9×9 的城只有 71 棟,空得像模型)。
+      const quads = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+      for (let i = quads.length - 1; i > 0; i--) {      // 決定性洗牌
+        const j = Math.floor(rnd() * (i + 1));
+        [quads[i], quads[j]] = [quads[j], quads[i]];
+      }
+      const n = 1 + Math.floor(rnd() * 3);              // 每格 1~3 棟
+      const qh = inner / 4;                             // 象限半邊長 12.5
       for (let i = 0; i < n; i++) {
-        // ★ 最多試 8 次,擺不下就少一棟 —— 同一格的樓**不可以重疊**:
-        //   重疊會做出凹角,resolveBuilding 把車推出 A 之後正好推進 B,車就在兩棟之間彈到卡死(city.test ⑤ 抓到的)。
-        for (let attempt = 0; attempt < 8; attempt++) {
-          const bw = inner * (0.28 + rnd() * 0.3) / 2;
-          const bd = inner * (0.28 + rnd() * 0.3) / 2;
-          const ox = (rnd() - 0.5) * (inner / 2 - bw);
-          const oz = (rnd() - 0.5) * (inner / 2 - bd);
-          const gap = 3.2;   // 兩棟之間至少留一台車寬,不然中間那條縫是死巷
-          if (placed.some((q) => Math.abs(center.x + ox - q.x) < q.w + bw + gap && Math.abs(center.z + oz - q.z) < q.d + bd + gap)) continue;
-          const b = {
-            x: center.x + ox, z: center.z + oz, w: bw, d: bd,
-            h: 8 + rnd() * 26, c, r,
-            kind: rnd() < 0.22 ? "shop" : "tower",
-            tint: rnd(),
-          };
-          placed.push(b); out.push(b);
-          break;
-        }
+        const [qx, qz] = quads[i];
+        const bw = qh * (0.44 + rnd() * 0.36);          // 半寬 5.5 ~ 10
+        const bd = qh * (0.44 + rnd() * 0.36);
+        const jx = (rnd() - 0.5) * (qh - bw);           // 在象限裡晃一點,不要排得像棋盤
+        const jz = (rnd() - 0.5) * (qh - bd);
+        out.push({
+          x: center.x + qx * qh + jx, z: center.z + qz * qh + jz, w: bw, d: bd,
+          h: 8 + rnd() * 26, c, r,
+          kind: rnd() < 0.22 ? "shop" : "tower",
+          tint: rnd(),
+        });
       }
     }
   }
@@ -164,7 +167,7 @@ export function resolveBuilding(buildings, x, z, radius = 1.1) {
    在人行道與廣場上走;車靠近會**先閃開**,真的碰到也只是被推開 + 車減速。
    不倒地、不流血、不消失 —— 這是給孩子玩的都市。 */
 export const PED = {
-  count: 40,
+  count: 90,           // 0908 地圖放大 2.25 倍,行人跟著加(40 → 90),不然大城市空得像沒人住
   speed: 1.5,          // 平常走路 m/s
   fleeSpeed: 4.2,      // 察覺車子時的閃避速度
   senseR: 9,           // 幾公尺內會察覺車子

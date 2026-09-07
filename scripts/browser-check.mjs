@@ -158,6 +158,53 @@ for (const id of ["moto", "horse", "run", "hover"]) {
   ok(figure[id].nape >= 1, `${id}:騎士後腦有安全帽護片(找到 ${figure[id].nape} 片)`);
 }
 
+// ★ 第二期:下車走路(0908 使用者點名)
+const foot = await page.evaluate(async () => {
+  const g = window.__city3d;
+  const sleep = () => { for (let i = 0; i < 30; i++) g.update(1 / 60); };
+  const objBefore = (() => { let n = 0; g.scene.traverse(() => n++); return n; })();
+  const veh0 = g.settings.vehicle;
+  // 下車
+  g.toggleFoot(); sleep();
+  const after = {
+    onFoot: g.onFoot,
+    parked: g.parked ? { x: g.parked.x, z: g.parked.z, vehicle: g.parked.vehicle } : null,
+    rigKind: g.rig.kind,
+    camView: g.camView,
+    walkerNearCar: g.parked ? Math.hypot(g.player.x - g.parked.x, g.player.z - g.parked.z) : -1,
+  };
+  // 走路中按數字鍵不該換載具
+  g.setVehicle("hover");
+  after.vehicleAfterSwitchAttempt = g.settings.vehicle;
+  // 走遠一點(超過 reach)再按 F:不該上車
+  g.player.x = g.parked.x + 40; g.player.z = g.parked.z + 40; sleep();
+  g.toggleFoot(); sleep();
+  after.stillOnFootWhenFar = g.onFoot;
+  // 走回去按 F:應該上車
+  g.player.x = g.parked.x + 1.5; g.player.z = g.parked.z + 1.5; sleep();
+  g.toggleFoot(); sleep();
+  after.onFootAfterMount = g.onFoot;
+  after.parkedAfterMount = g.parked;
+  after.rigKindAfterMount = g.rig.kind;
+  after.vehicleAfterMount = g.settings.vehicle;
+  after.veh0 = veh0;
+  // 物件數:下車再上車不可以在場景裡留下垃圾
+  let objAfter = 0; g.scene.traverse(() => objAfter++);
+  after.objDelta = objAfter - objBefore;
+  return after;
+});
+ok(foot.onFoot === true, "按 F 下車:進入走路狀態");
+ok(!!foot.parked, "下車後載具停在原地(記下座標)");
+ok(foot.rigKind === "run", `下車後外型換成走路的人(${foot.rigKind})`);
+ok(foot.camView !== "cockpit", "下車後不會停在駕駛座視角(走路沒有駕駛座)");
+ok(foot.walkerNearCar > 0.5 && foot.walkerNearCar < 4, `人站在載具旁邊 ${foot.walkerNearCar.toFixed(1)}m(不會生在車體裡、也不會噴飛)`);
+ok(foot.vehicleAfterSwitchAttempt === foot.veh0, "走路中換載具無效(車停在別的地方,換了會弄丟)");
+ok(foot.stillOnFootWhenFar === true, "離載具 56m 按 F 不會瞬間上車");
+ok(foot.onFootAfterMount === false, "走回載具旁按 F:上車了");
+ok(foot.parkedAfterMount === null, "上車後停車點清掉");
+ok(foot.rigKindAfterMount === foot.veh0, `上車後外型換回原載具(${foot.rigKindAfterMount})`);
+ok(Math.abs(foot.objDelta) < 400, `下車再上車沒有在場景裡留下垃圾(物件差 ${foot.objDelta})`);
+
 // 五檔視角
 for (let i = 0; i < 5; i++) {
   await page.keyboard.press("v");

@@ -14,7 +14,8 @@ const put = (mesh, x, y, z, parent) => { mesh.position.set(x, y, z); parent.add(
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
 /** 騎士頭(臉部鐵則):膚色球 + 帽殼 + 眼白/瞳孔 + 微笑 + 露出的耳。原點=脖子。 */
-function makeRiderHead(hatMat, skin) {
+/** hatMat=帽色;opts.helmet=false ⇒ 改成頭髮(跑步/走路的人不戴安全帽),形狀一樣只是換色、不畫帽箍。 */
+function makeRiderHead(hatMat, skin, { helmet = true, hairColor = 0x2b2118 } = {}) {
   const g = new THREE.Group();
   // 脖子(0908 使用者實玩:「摩托車的人頭怎會長在背上,也沒有脖子,騎馬的人也沒有脖子」)。
   // ★ 圓柱往下多伸一截、埋進軀幹裡 ⇒ 各 rig 只要把 head.position 對準軀幹上緣就接得起來,不會露斷面。
@@ -23,15 +24,18 @@ function makeRiderHead(hatMat, skin) {
   put(new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 10), skin), 0, 0.17, 0, g);
   // 🪖 安全帽(0908 使用者實玩:「騎馬與騎車的人,後面沒有頭髮」——原本只有頂上 89° 的瓜皮帽,
   //    後腦與後頸整片裸著膚色球。改成帽殼 + 後腦護片 + 帽箍 + 下巴帶,騎車戴安全帽也是好示範)。
-  const hat = put(new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), hatMat), 0, 0.2, -0.01, g);
+  const capMat = helmet ? hatMat : lambert(hairColor);
+  const hat = put(new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), capMat), 0, 0.2, -0.01, g);
   hat.scale.set(1.02, 1, 1.05);
   // 後腦護片:只包正後方 ±60°(3π/2 為正後方),兩側留空 ⇒ **不蓋耳朵**(人物鐵則:眼耳嘴眉齊)
-  const nape = put(new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 8, Math.PI * 1.5 - 1.266, 2.532, Math.PI / 2 - 0.03, 0.56), hatMat), 0, 0.2, -0.01, g);
+  const nape = put(new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 8, Math.PI * 1.5 - 1.266, 2.532, Math.PI / 2 - 0.03, 0.56), capMat), 0, 0.2, -0.01, g);
   nape.scale.set(1.02, 1, 1.05);
   nape.userData.napeGuard = true;      // 驗收用:確認後腦真的有東西遮
-  // 帽箍(深色一圈,輪廓才看得出是安全帽不是頭髮)
-  const brim = put(new THREE.Mesh(new THREE.TorusGeometry(0.203, 0.015, 6, 22), lambert(0x2a2f3a)), 0, 0.2, -0.01, g);
-  brim.rotation.x = Math.PI / 2; brim.scale.set(1.02, 1.05, 1);
+  // 帽箍(深色一圈,輪廓才看得出是安全帽不是頭髮);頭髮版不畫
+  if (helmet) {
+    const brim = put(new THREE.Mesh(new THREE.TorusGeometry(0.203, 0.015, 6, 22), lambert(0x2a2f3a)), 0, 0.2, -0.01, g);
+    brim.rotation.x = Math.PI / 2; brim.scale.set(1.02, 1.05, 1);
+  }
   // 下巴帶(兩側各一條,往內斜)
   // ※ 下巴帶試過就拿掉了:這種多邊形量體下,再細的帶子從側面看都是「貼在臉頰上的一根黑棒子」,
   //   而帽殼 + 後腦護片 + 黑帽箍已經足夠讓人一眼看出是安全帽。
@@ -238,7 +242,7 @@ export function makeRunnerRig(hex, { interior = false } = {}) {
   put(box(0.38, 0.22, 0.22, paint), 0, -0.06, 0, body);    // 腹
   put(box(0.4, 0.18, 0.23, dark), 0, -0.24, 0, body);      // 髖(短褲)
   hide.push(body);
-  const head = makeRiderHead(paint, skin); head.position.set(0, 1.47, 0); tilt.add(head); hide.push(head);
+  const head = makeRiderHead(paint, skin, { helmet: false }); head.position.set(0, 1.47, 0); tilt.add(head); hide.push(head);   // 用兩條腿跑的人不戴安全帽
   // 長腿(大腿+小腿+腳掌),pivot=髖
   const legs = [];
   for (const sx of [-1, 1]) {
