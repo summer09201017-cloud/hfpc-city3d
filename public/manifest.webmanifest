@@ -1,0 +1,12 @@
+{
+  "name": "3D 都市漫遊・開車騎馬都行",
+  "short_name": "都市漫遊",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0c1322",
+  "theme_color": "#0c1322",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

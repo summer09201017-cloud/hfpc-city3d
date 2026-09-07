@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0c1322" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" />
+    <title>3D 都市漫遊・開車騎馬都行</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <canvas id="gameCanvas" aria-label="3D 都市漫遊畫面"></canvas>
+
+      <div id="rotate" class="rotate-hint" aria-hidden="true">
+        <div class="rotate-emoji">🔄</div>
+        <p>請把手機轉成<b>橫向</b>來玩<br /><span>轉成橫向會自動全螢幕</span></p>
+      </div>
+
+      <!-- 左上:這一趟逛了多少 -->
+      <div class="trip-card" id="tripCard" hidden>
+        <div class="trip-line big"><span id="vehicleText">🏎️ 賽車</span></div>
+        <div class="trip-line"><span id="surfaceText">馬路</span></div>
+        <div class="trip-line small">走了 <span id="distText">0</span> 公尺・逛過 <span id="blockText">0/36</span> 個街區</div>
+      </div>
+
+      <div class="mini-wrap" id="miniWrap" hidden>
+        <canvas id="miniMap" width="170" height="170"></canvas>
+        <div class="view-tag" id="viewTag">視角:追尾跟隨</div>
+      </div>
+
+      <div class="speed-panel" id="speedPanel" hidden>
+        <div class="speed-num"><span id="speedText">0</span><small>km/h</small></div>
+        <div class="turbo-row" id="turboRow">
+          <span class="turbo-label" id="turboLabel">⚡ 渦輪</span>
+          <div class="turbo-track"><div class="turbo-fill" id="turboFill"></div></div>
+        </div>
+        <div class="speed-hint" id="speedHint">↑ 油門・↓ 煞車・← → 轉向・Shift 渦輪・V 視角・1~5 換載具</div>
+      </div>
+
+      <div class="message-ribbon" id="statusMessage">選好載具,按「出發」就可以在都市裡自由亂逛。</div>
+
+      <!-- 換載具快捷列:開到一半也能換(使用者要的自由切換) -->
+      <div class="vehicle-bar" id="vehicleBar" hidden></div>
+
+      <div class="touch-controls" id="touchControls">
+        <div class="touch-left">
+          <button id="tLeft" class="touch-btn">◀</button>
+          <button id="tRight" class="touch-btn">▶</button>
+        </div>
+        <div class="touch-right">
+          <button id="tBoost" class="touch-btn small">⚡</button>
+          <button id="tBrake" class="touch-btn brake">煞車</button>
+          <button id="tGas" class="touch-btn gas">油門</button>
+        </div>
+      </div>
+
+      <div class="hud-buttons">
+        <button id="menuButton">選單</button>
+        <button id="audioButton">音效開啟</button>
+        <button id="cameraButton">視角</button>
+        <button id="helpButton">玩法</button>
+        <button id="fsButton" aria-label="全螢幕">⛶</button>
+      </div>
+
+      <div class="overlay-shell" id="helpOverlay">
+        <div class="overlay-card help-card">
+          <p class="overlay-eyebrow">玩法說明</p>
+          <h2>🏙️ 怎麼玩</h2>
+          <div class="help-body">
+            <div>🕹️ <b>開車</b>:<b>↑ / W</b> 油門、<b>↓ / S</b> 煞車(停住後繼續按=倒車)、<b>← → / A D</b> 轉向、<b>Shift</b> 渦輪、<b>空白鍵</b> 手煞甩尾。手機:左下 ◀▶、右下 油門/煞車/⚡。</div>
+            <div>🚗 <b>隨時換載具</b>:數字鍵 <b>1~5</b> 或畫面下方那排鈕,開到一半也能換 —— 🏎️ 賽車、🏍️ 摩托車、🐎 馬、🏃 跑步、🛸 懸浮車。</div>
+            <div class="rule">🛣️ <b>想去哪就去哪</b>:<b>人行道開得上去、廣場穿得過去、公園也能開進去</b>,只是會比馬路慢一點、抖一點。🐎 馬、🏃 跑步、🛸 懸浮車在人行道與草地上<b>幾乎不減速</b>,可以直接抄近路。</div>
+            <div class="rule">🙋 <b>撞不傷人</b>:行人看到車會自己閃開;真的碰到他也只是跳開一下,<b>不會受傷、不會倒地</b>,你的車會慢下來一點點。</div>
+            <div>🏢 <b>只有建築物擋路</b>:撞到會彈開、掉速,不會翻車。卡住太久會自動幫你放回馬路上。</div>
+            <div>📷 <b>視角</b>:<b>V</b> 或「視角」鈕循環五檔:追尾跟隨 → 車頭 → <b>駕駛座(第一人稱)</b> → 高空俯瞰 → 過肩。</div>
+          </div>
+          <div class="overlay-actions">
+            <!-- 🔊 給還不識字的孩子:點一下唸玩法(點擊本身就是使用者手勢,iOS 才准出聲) -->
+            <button id="helpSpeakButton" class="ghost-button">🔊 聽玩法</button>
+            <button id="helpCloseButton">知道了,出發!</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="home-screen visible" id="homeScreen">
+        <div class="home-card">
+          <p class="home-eyebrow">CITY 3D・開車 騎馬 跑步 都行</p>
+          <h1>🏙️ 3D 都市漫遊</h1>
+          <p class="home-sub">沒有比賽、沒有名次 —— 挑一種載具,在都市裡自由亂逛。<b>人行道、廣場、公園都能開進去</b>,行人會自己閃開,<b>撞不傷人</b>。</p>
+
+          <!-- 👶 年齡三檔(kid-age-modes):一顆鈕一次設好車速與視角。
+               ★ 只設這兩項 —— 載具、車色、行人是口味,不歸年齡管(按一下把人家選的馬換掉最惹人厭)。 -->
+          <div class="age-presets" id="agePresets"></div>
+
+          <div class="home-row">
+            <label>載具
+              <select id="vehicleSelect"></select>
+            </label>
+            <label>車色
+              <select id="colorSelect"></select>
+            </label>
+            <label>速度
+              <select id="speedSelect"></select>
+            </label>
+            <label>行人
+              <select id="pedSelect">
+                <option value="on" selected>有(會閃開)</option>
+                <option value="off">沒有</option>
+              </select>
+            </label>
+            <label>音效
+              <select id="audioSelect">
+                <option value="on" selected>開啟</option>
+                <option value="off">靜音</option>
+              </select>
+            </label>
+          </div>
+
+          <p class="home-hint" id="vehicleHint"></p>
+          <div class="home-actions">
+            <button class="start-button" id="startButton">出發</button>
+          </div>
+          <details class="ver-fold">
+            <summary>版本 v1(2026-09-08)・看看這一版做了什麼</summary>
+            <p class="home-hint ver-tag" id="verTag">版本 v1(2026-09-08)首發・🏙️ <b>沒有比賽的都市</b>:36 個街區、兩座廣場、兩座公園,想去哪就去哪,逛過的街區會累計。🚶 <b>人行道、廣場、公園全都開得上去</b> —— 地面只決定快慢,沒有一種是牆;真正擋路的只有建築物,撞到彈開掉速、不翻車,卡住太久自動放回馬路。🧒 <b>撞不傷人</b>:行人九公尺內就先閃開,真的碰到只是被推開、車子掉速,人不會消失也不會倒地。🐎 <b>五種載具隨時換</b>(數字鍵 1~5,開到一半也能換):馬、跑步、懸浮車草地零減速,可以直接穿公園抄近路;懸浮車大馬路直線最快、摩托車小巷最靈活。👶 <b>年齡三檔</b>(幼幼/兒童/青少一鍵設好車速與視角,跨站共用偏好)。🔊 <b>人聲導覽</b>(預烤人聲,幼幼檔自動唸玩法給不識字的孩子)。📷 五檔視角含駕駛座第一人稱。</p>
+          </details>
+        </div>
+      </div>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+<script>
+try {
+  if (!['localhost', '127.0.0.1', ''].includes(location.hostname)) {
+    navigator.sendBeacon?.('https://hfpc-play-stats.summer09201017.workers.dev/api/ping?g=city3d');
+  }
+} catch (_) {}
+</script>
+<script>
+(function () {
+  var LOBBY = 'https://hfpc-olympics.summer09201017.workers.dev';
+  function go() {
+    try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen(); } catch (e) {}
+    if (window.parent && window.parent !== window) {
+      try { window.parent.postMessage({ type: 'hfpc-exit' }, '*'); } catch (e) {}
+      if (history.length > 1) { history.back(); return; }
+    }
+    location.href = LOBBY;
+  }
+  function add() {
+    if (document.querySelector('[data-hfpc-lobby]')) return;
+    var b = document.createElement('button');
+    b.textContent = '← 返回大廳';
+    b.setAttribute('aria-label', '返回大廳');
+    b.setAttribute('data-hfpc-lobby', '1');
+    b.style.cssText = 'position:fixed;z-index:2147483000;' +
+      'top:calc(8px + env(safe-area-inset-top));left:calc(8px + env(safe-area-inset-left));' +
+      'min-width:44px;min-height:44px;padding:9px 14px;border:0;border-radius:12px;' +
+      'font:600 15px/1.2 system-ui,"Microsoft JhengHei",sans-serif;' +
+      'background:rgba(0,0,0,.58);color:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent';
+    b.addEventListener('click', go);
+    (document.body || document.documentElement).appendChild(b);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', add); else add();
+})();
+</script>
+</body>
+</html>

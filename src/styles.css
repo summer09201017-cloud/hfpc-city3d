@@ -1,0 +1,265 @@
+/* city3d —— 深色都市 UI(收割 racing3d,再拿掉整個比賽層) */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  background: #0c1322; color: #eef2f8; overflow: hidden;
+  -webkit-user-select: none; user-select: none;
+}
+.app-shell { position: fixed; inset: 0; }
+#gameCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+[hidden] { display: none !important; }
+button { font-family: inherit; }
+
+/* 直向提示 */
+.rotate-hint { display: none; }
+@media (orientation: portrait) and (pointer: coarse) {
+  .rotate-hint { position: fixed; inset: 0; z-index: 999; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px; background: #15384d; color: #eaf4ff;
+    text-align: center; padding: 24px; font-size: 21px; line-height: 1.7; }
+  .rotate-emoji { font-size: 72px; animation: rotateHint 1.8s ease-in-out infinite; }
+}
+@keyframes rotateHint { 0%, 100% { transform: rotate(-12deg); } 50% { transform: rotate(78deg); } }
+
+/* 左上:這一趟的里程與逛過的街區(返回大廳鈕在 8px,卡片放 64px 下) */
+.race-card {
+  position: absolute; top: 64px; left: 62px; z-index: 20;   /* left 62:讓位給 rank.js 的 🏆 浮鈕(top 112px 左側 8~56px),不然蓋住名次(0907 截圖抓到) */
+  padding: 10px 16px; border-radius: 16px;
+  background: rgba(10, 16, 30, 0.78); border: 1px solid rgba(255, 196, 80, 0.4);
+  min-width: 190px;
+}
+.race-line { font-size: 15px; line-height: 1.5; }
+.race-line.big { font-size: 24px; font-weight: 800; color: #ffd24a; }
+.race-line.small { font-size: 12px; opacity: 0.85; font-variant-numeric: tabular-nums; }
+
+/* 右上:小地圖 + 視角名 */
+.mini-wrap { position: absolute; top: 12px; right: 12px; z-index: 20; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+#miniMap { width: 170px; height: 170px; border-radius: 14px; background: rgba(10, 16, 30, 0.7); border: 1px solid rgba(255,255,255,0.18); }
+.view-tag { padding: 4px 12px; border-radius: 999px; background: rgba(10, 16, 30, 0.78); font-size: 13px; border: 1px solid rgba(125, 180, 255, 0.4); }
+
+/* 右下:速度表 + 渦輪 */
+.speed-panel {
+  position: absolute; right: 12px; bottom: 56px; z-index: 20;
+  padding: 10px 16px; border-radius: 16px; text-align: right;
+  background: rgba(10, 16, 30, 0.78); border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.speed-num { font-size: 42px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+.speed-num small { font-size: 13px; margin-left: 6px; opacity: 0.8; font-weight: 600; }
+.turbo-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; justify-content: flex-end; }
+.turbo-label { font-size: 12px; font-weight: 700; color: #ffd24a; }
+.turbo-track { width: 150px; height: 12px; border-radius: 999px; background: rgba(255,255,255,0.14); overflow: hidden; }
+.turbo-fill { width: 100%; height: 100%; transform-origin: left center; transform: scaleX(1);
+  background: linear-gradient(90deg, #ffb347, #ffd24a); border-radius: 999px; transition: background 0.2s; }
+.turbo-row.tired .turbo-fill { background: #6b7280; }
+.turbo-row.boosting .turbo-fill { background: linear-gradient(90deg, #ff6a00, #fff176); }
+.speed-hint { font-size: 11px; opacity: 0.7; margin-top: 6px; }
+@media (pointer: coarse) { .speed-hint { display: none; } .speed-panel { bottom: 140px; } }
+
+/* 中央倒數 / 逆向 */
+.countdown {
+  position: absolute; left: 50%; top: 34%; transform: translate(-50%, -50%);
+  font-size: min(26vw, 170px); font-weight: 900; color: #ffd24a; z-index: 30;
+  text-shadow: 0 6px 30px rgba(0,0,0,0.6); animation: cdPop 0.9s ease-out;
+}
+.countdown.go { color: #7de08c; }
+@keyframes cdPop { 0% { transform: translate(-50%, -50%) scale(1.5); opacity: 0; } 20% { opacity: 1; } 100% { transform: translate(-50%, -50%) scale(1); } }
+.wrong-way {
+  position: absolute; left: 50%; top: 22%; transform: translateX(-50%); z-index: 30;
+  padding: 10px 22px; border-radius: 14px; background: rgba(200, 40, 30, 0.9); color: #fff;
+  font-size: 22px; font-weight: 800; animation: blink 0.8s steps(2) infinite;
+}
+@keyframes blink { 50% { opacity: 0.45; } }
+
+/* 訊息帶(左下) */
+.message-ribbon {
+  position: absolute; bottom: 56px; left: 14px; z-index: 20;
+  max-width: min(60vw, 520px); padding: 8px 18px; border-radius: 999px;
+  background: rgba(10, 16, 30, 0.72); font-size: 16px; font-weight: 600;
+}
+@media (pointer: coarse) { .message-ribbon { bottom: 150px; } }
+
+/* 觸控 */
+.touch-controls { display: none; }
+@media (pointer: coarse) {
+  .touch-controls { display: block; position: absolute; inset: 0; z-index: 25; pointer-events: none; }
+  .touch-left, .touch-right { position: absolute; bottom: calc(14px + env(safe-area-inset-bottom)); display: flex; gap: 12px; pointer-events: auto; }
+  .touch-left { left: calc(14px + env(safe-area-inset-left)); }
+  .touch-right { right: calc(14px + env(safe-area-inset-right)); align-items: flex-end; }
+  .touch-btn { min-width: 84px; min-height: 84px; border-radius: 22px; border: 2px solid rgba(255,255,255,0.35);
+    background: rgba(10, 16, 30, 0.6); color: #fff; font-size: 24px; font-weight: 800; touch-action: none; -webkit-tap-highlight-color: transparent; }
+  .touch-btn.gas { background: rgba(60, 170, 90, 0.7); min-width: 100px; min-height: 100px; }
+  .touch-btn.brake { background: rgba(200, 60, 50, 0.7); font-size: 20px; }
+  .touch-btn.small { min-width: 64px; min-height: 64px; font-size: 26px; background: rgba(255, 180, 60, 0.6); }
+  .touch-btn.active { filter: brightness(1.4); transform: scale(0.96); }
+}
+
+/* HUD 鈕(下方) */
+.hud-buttons { position: absolute; bottom: 12px; left: 14px; z-index: 26; display: flex; gap: 8px; flex-wrap: wrap; }
+.hud-buttons button {
+  min-height: 34px; padding: 6px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.22);
+  background: rgba(10, 16, 30, 0.7); color: #eef2f8; font-size: 13px; cursor: pointer;
+}
+.hud-buttons button:hover { background: rgba(40, 60, 100, 0.85); }
+@media (pointer: coarse) { .hud-buttons { left: 50%; transform: translateX(-50%); bottom: calc(10px + env(safe-area-inset-bottom)); } }
+
+/* 蓋版(說明/結算) */
+.overlay-shell {
+  position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center;
+  background: rgba(4, 8, 18, 0.66); padding: 16px;
+}
+.overlay-shell.visible { display: flex; }
+.overlay-card {
+  width: min(92vw, 560px); max-height: 92vh; overflow: auto; padding: 22px 26px; border-radius: 22px;
+  background: #121a2c; border: 1px solid rgba(255, 210, 74, 0.35); box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.overlay-eyebrow { font-size: 12px; letter-spacing: 0.2em; opacity: 0.7; margin-bottom: 6px; }
+.overlay-card h2 { font-size: 26px; margin-bottom: 8px; }
+.overlay-card p { line-height: 1.6; }
+.help-body { display: flex; flex-direction: column; gap: 10px; font-size: 15px; line-height: 1.7; }
+.help-body .rule { padding: 8px 12px; border-radius: 12px; background: rgba(125, 224, 140, 0.12); }
+.overlay-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+.overlay-actions button {
+  min-height: 44px; padding: 10px 20px; border-radius: 12px; border: 0; cursor: pointer;
+  background: #ffd24a; color: #201a06; font-weight: 800; font-size: 16px;
+}
+.overlay-actions button:first-child { background: rgba(255,255,255,0.14); color: #fff; }
+.result-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.result-table td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.result-table tr.me td { background: rgba(255, 210, 74, 0.14); font-weight: 800; }
+.result-table .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; vertical-align: middle; border: 1px solid rgba(255,255,255,0.4); }
+.result-card h2 { font-size: 30px; }
+.star-line { font-size: 17px; font-weight: 800; color: #ffd24a; display: flex; align-items: center; gap: 8px; min-height: 0; }
+.star-line .oiled { color: #b0a8ff; }
+.daily-badge { font-size: 12px; font-weight: 700; color: #7de08c; border: 1px solid rgba(125,224,140,.5); border-radius: 999px; padding: 1px 8px; }
+.daily-button { width: 100%; min-height: 46px; margin-top: 10px; border: 1px solid rgba(125,224,140,.55); border-radius: 14px; cursor: pointer;
+  background: rgba(125, 224, 140, 0.14); color: #d9ffe2; font-size: 16px; font-weight: 800; }
+.daily-button:hover { background: rgba(125, 224, 140, 0.24); }
+/* 🔒 開始鈕永遠看得到:卡片內容再長,這一區都黏在底部(上緣加漸層,讓捲動的內容淡入底下) */
+.home-actions {
+  position: sticky; bottom: 0; z-index: 2;
+  /* ⚠ margin-bottom 不可以是負值:sticky 黏住時它會吃掉「緊鄰前一個元素」的空間,
+     捲到底時那個元素就被蓋掉十幾 px(0907 逐尺寸量到:先是今日題摘要、拿掉摘要後換版本簡歷中招)。 */
+  margin: 10px -28px 0; padding: 12px 28px calc(12px + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, rgba(14, 20, 36, 0) 0%, rgba(14, 20, 36, 0.96) 22%, rgba(14, 20, 36, 0.99) 100%);
+}
+.home-actions .daily-button { margin-top: 8px; }
+.home-actions .daily-hint { margin: 6px 0 0; font-size: 12px; opacity: .78; }
+.record-text { margin-top: 6px; color: #ffd24a; font-weight: 700; font-size: 15px; line-height: 1.6; min-height: 1.2em; }
+.pause-card h2 { font-size: 30px; }
+.pause-card p { font-size: 16px; }
+#pauseButton { border-color: rgba(255, 210, 74, 0.55); color: #ffd24a; font-weight: 700; }
+
+/* 首頁 */
+.home-screen {
+  position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center;
+  background: linear-gradient(180deg, rgba(6, 10, 22, 0.55), rgba(6, 10, 22, 0.85)); padding: 16px;
+}
+.home-screen.visible { display: flex; }
+.home-card {
+  width: min(94vw, 640px); max-height: 94vh; overflow: auto; padding: 24px 28px; border-radius: 24px;
+  background: rgba(14, 20, 36, 0.94); border: 1px solid rgba(255, 210, 74, 0.35); box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+}
+.home-eyebrow { font-size: 12px; letter-spacing: 0.25em; opacity: 0.7; }
+.home-card h1 { font-size: 34px; margin: 4px 0 6px; }
+.home-sub { font-size: 15px; opacity: 0.9; line-height: 1.6; margin-bottom: 14px; }
+/* 👶 年齡一鍵預設:三顆大鈕(投影/平板上點得到),選中的亮起 */
+.age-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0 10px; }
+.age-btn { min-height: 62px; padding: 8px 6px; border-radius: 14px; cursor: pointer;
+  border: 2px solid rgba(255,255,255,0.22); background: rgba(255,255,255,0.06); color: #eef2f8;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.age-btn b { font-size: 17px; font-weight: 800; }
+.age-btn small { font-size: 11px; opacity: 0.75; }
+.age-btn:hover { background: rgba(255,255,255,0.12); }
+.age-btn.on { border-color: #ffd24a; background: rgba(255, 210, 74, 0.16); }
+.age-btn.on b { color: #ffd24a; }
+.adv-fold > summary { cursor: pointer; list-style: none; padding: 6px 2px; font-size: 14px; opacity: 0.82; }
+.adv-fold > summary::-webkit-details-marker { display: none; }
+.adv-fold > summary::before { content: "▸ "; }
+.adv-fold[open] > summary::before { content: "▾ "; }
+.home-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 14px; margin: 10px 0; }
+.home-row label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; opacity: 0.9; }
+/* ★ 深色 select 鐵則:Windows 展開選單是系統白底 */
+select { color-scheme: dark; min-height: 40px; padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.25);
+  background: #1a2338; color: #eef2f8; font-size: 15px; }
+option { background: #1a2338; color: #eef2f8; }
+.home-hint { font-size: 13px; opacity: 0.8; line-height: 1.6; margin: 10px 0; }
+.ver-tag { font-size: 12px; opacity: 0.6; }
+.start-button {
+  width: 100%; min-height: 54px; border: 0; border-radius: 16px; cursor: pointer;
+  background: linear-gradient(90deg, #ffb347, #ffd24a); color: #201a06; font-size: 20px; font-weight: 900;
+}
+.start-button:hover { filter: brightness(1.06); }
+@media (prefers-reduced-motion: reduce) { .countdown, .wrong-way, .rotate-emoji { animation: none; } }
+
+/* ── 雙人同機(分割畫面):左半 P1(藍)、右半 P2(紅);duel-2p-kit 顏色鐵則 ── */
+.seam { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: rgba(255,255,255,0.55); z-index: 15; pointer-events: none; }
+/* P2 卡片放右上角(不貼著接縫):置中的小地圖會跟它疊在一起——0906 分割畫面截圖抓到 */
+.race-card.p2 { left: auto; right: 12px; border-color: rgba(255, 90, 80, 0.55); }
+.race-card.p2 .race-line.big { color: #ff8a80; }
+.duel2p .race-card:not(.p2) { border-color: rgba(100, 160, 255, 0.55); }
+.duel2p .race-card:not(.p2) .race-line.big { color: #8ab4ff; }
+.duel2p .mini-wrap { right: auto; left: 50%; transform: translateX(-50%); align-items: center; }
+.duel2p #miniMap { width: 116px; height: 116px; }   /* 分割畫面:縮小,才不會壓到兩邊的卡片 */
+.duel2p .view-tag { display: none; }                /* 視角改印在各自的鍵位提示裡(左右各一份) */
+.duel2p .speed-panel:not(.p2) { right: calc(50% + 12px); }
+.speed-panel.p2 { right: 12px; border-color: rgba(255, 90, 80, 0.45); }
+.duel2p .speed-panel:not(.p2) { border-color: rgba(100, 160, 255, 0.45); }
+.duel2p .touch-controls { display: none !important; }
+.duel2p .message-ribbon { max-width: min(46vw, 520px); }
+.duel2p .speed-hint { display: block; }
+
+/* 🏷 版本與改版簡歷:預設收合、打開可捲(ver-fold v1(game-must-haves/fold-vertag))
+   ★ max-height + overflow 是重點:少了它,「打開」只是把遮擋換個時機
+     —— 1000 字以上的簡歷照樣蓋掉選單(撞球 0907 的原病)。 */
+.ver-fold { margin-top: 10px; text-align: left; }
+.ver-fold > summary {
+  cursor: pointer; list-style: none; padding: 4px 2px;
+  font-size: .82rem; line-height: 1.4; opacity: .72;
+}
+.ver-fold > summary::-webkit-details-marker { display: none; }
+.ver-fold > summary::before { content: "▸ "; }
+.ver-fold[open] > summary::before { content: "▾ "; }
+.ver-fold > summary:hover, .ver-fold > summary:focus-visible { opacity: 1; }
+.ver-fold[open] > :not(summary) {
+  max-height: min(46vh, 340px); overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── 都市漫遊特有 ─────────────────────────── */
+.trip-card { position: absolute; top: 64px; left: 62px; z-index: 20; padding: 10px 16px; border-radius: 16px;
+  background: rgba(10, 16, 30, 0.78); border: 1px solid rgba(120, 200, 255, 0.4); min-width: 190px; }
+.trip-line { font-size: 15px; line-height: 1.5; }
+.trip-line.big { font-size: 22px; font-weight: 800; color: #8fd4ff; }
+.trip-line.small { font-size: 12px; opacity: 0.85; font-variant-numeric: tabular-nums; }
+
+/* 換載具快捷列:開著也能換(數字鍵 1~5 或直接點) */
+.vehicle-bar { position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 26;
+  display: flex; gap: 8px; }
+.veh-btn { min-width: 56px; min-height: 52px; border-radius: 14px; cursor: pointer;
+  border: 2px solid rgba(255,255,255,0.22); background: rgba(10, 16, 30, 0.72); color: #eef2f8;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+.veh-btn .veh-ico { font-size: 22px; line-height: 1; }
+.veh-btn .veh-key { font-size: 10px; opacity: 0.6; }
+.veh-btn:hover { background: rgba(40, 60, 100, 0.85); }
+.veh-btn.on { border-color: #8fd4ff; background: rgba(80, 170, 255, 0.22); }
+@media (pointer: coarse) { .vehicle-bar { bottom: calc(76px + env(safe-area-inset-bottom)); } .veh-btn .veh-key { display: none; } }
+
+/* 👶 年齡三檔大鈕(kid-age-modes):不識字的孩子與趕時間的老師不用逐項選 */
+.age-presets { display: flex; gap: 10px; margin: 4px 0 14px; flex-wrap: wrap; }
+.age-btn {
+  flex: 1 1 130px; min-height: 56px; padding: 8px 10px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06); color: #eef3ff; font: inherit; line-height: 1.25;
+}
+.age-btn b { font-size: 1.05rem; letter-spacing: 0.03em; }
+.age-btn small { font-size: 0.74rem; opacity: 0.72; text-align: center; }
+.age-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.age-btn.on { border-color: #5ad1ff; background: rgba(90, 209, 255, 0.18); box-shadow: 0 0 0 1px rgba(90, 209, 255, 0.35); }
+
+/* 次要動作鈕(🔊 聽玩法):不搶主鈕的視覺重量 */
+.ghost-button {
+  padding: 10px 16px; border-radius: 10px; cursor: pointer; font: inherit;
+  border: 2px solid rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.06); color: #eef3ff;
+}
+.ghost-button:hover { background: rgba(255, 255, 255, 0.14); }

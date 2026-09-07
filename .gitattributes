@@ -1,0 +1,3 @@
+# .bat 一律 CRLF,否則雙擊時 cmd 解析 goto 失敗閃退
+*.bat text eol=crlf
+*.cmd text eol=crlf
