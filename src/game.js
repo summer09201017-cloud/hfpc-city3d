@@ -397,6 +397,10 @@ export class CityGame {
     }
     const hideNow = this.cam.view === "cockpit" && this.phase === "driving";
     for (const m of rig.hide) m.visible = !hideNow;
+    // ★ 第一人稱內裝(儀表板/方向盤/速度錶)只該在駕駛座視角看得到。
+    //   漏掉這一行,跑步那顆速度錶就會**浮在人的胸前**,追尾視角一眼看到(0908 使用者實玩回報);
+    //   車與摩托車也一樣,只是內裝藏在車體裡比較看不出來。
+    if (rig.cockpit) rig.cockpit.visible = hideNow;
   }
 
   _syncPeds(dt) {

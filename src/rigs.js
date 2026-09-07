@@ -16,13 +16,30 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 /** 騎士頭(臉部鐵則):膚色球 + 帽殼 + 眼白/瞳孔 + 微笑 + 露出的耳。原點=脖子。 */
 function makeRiderHead(hatMat, skin) {
   const g = new THREE.Group();
+  // 脖子(0908 使用者實玩:「摩托車的人頭怎會長在背上,也沒有脖子,騎馬的人也沒有脖子」)。
+  // ★ 圓柱往下多伸一截、埋進軀幹裡 ⇒ 各 rig 只要把 head.position 對準軀幹上緣就接得起來,不會露斷面。
+  const neck = put(new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.098, 0.18, 10), skin), 0, -0.04, 0, g);
+  neck.userData.neck = true;
   put(new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 10), skin), 0, 0.17, 0, g);
-  const hat = put(new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8, 0, Math.PI * 2, 0, 1.55), hatMat), 0, 0.2, -0.01, g);
-  hat.scale.set(1, 1, 1.05);
+  // 🪖 安全帽(0908 使用者實玩:「騎馬與騎車的人,後面沒有頭髮」——原本只有頂上 89° 的瓜皮帽,
+  //    後腦與後頸整片裸著膚色球。改成帽殼 + 後腦護片 + 帽箍 + 下巴帶,騎車戴安全帽也是好示範)。
+  const hat = put(new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), hatMat), 0, 0.2, -0.01, g);
+  hat.scale.set(1.02, 1, 1.05);
+  // 後腦護片:只包正後方 ±60°(3π/2 為正後方),兩側留空 ⇒ **不蓋耳朵**(人物鐵則:眼耳嘴眉齊)
+  const nape = put(new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 8, Math.PI * 1.5 - 1.266, 2.532, Math.PI / 2 - 0.03, 0.56), hatMat), 0, 0.2, -0.01, g);
+  nape.scale.set(1.02, 1, 1.05);
+  nape.userData.napeGuard = true;      // 驗收用:確認後腦真的有東西遮
+  // 帽箍(深色一圈,輪廓才看得出是安全帽不是頭髮)
+  const brim = put(new THREE.Mesh(new THREE.TorusGeometry(0.203, 0.015, 6, 22), lambert(0x2a2f3a)), 0, 0.2, -0.01, g);
+  brim.rotation.x = Math.PI / 2; brim.scale.set(1.02, 1.05, 1);
+  // 下巴帶(兩側各一條,往內斜)
+  // ※ 下巴帶試過就拿掉了:這種多邊形量體下,再細的帶子從側面看都是「貼在臉頰上的一根黑棒子」,
+  //   而帽殼 + 後腦護片 + 黑帽箍已經足夠讓人一眼看出是安全帽。
   for (const sx of [-1, 1]) {
     put(new THREE.Mesh(new THREE.SphereGeometry(0.036, 8, 6), lambert(0xffffff)), sx * 0.06, 0.18, 0.15, g);
     put(new THREE.Mesh(new THREE.SphereGeometry(0.018, 6, 6), lambert(0x111111)), sx * 0.06, 0.18, 0.182, g);
-    put(new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 6), skin), sx * 0.165, 0.15, 0.02, g);   // 耳朵(帽子不蓋耳)
+    const ear = put(new THREE.Mesh(new THREE.SphereGeometry(0.032, 6, 6), skin), sx * 0.166, 0.172, -0.015, g);   // 耳朵(帽子不蓋耳;要在頭中心偏後、與眼同高,擺太前側面看像鼻子)
+    ear.scale.set(0.62, 1.15, 1);
   }
   const smile = put(new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 6, 10, Math.PI), lambert(0x7a3b2e)), 0, 0.11, 0.165, g);
   smile.rotation.z = Math.PI;   // 弧開口朝上=微笑
@@ -191,7 +208,10 @@ export function makeMotoRig(hex, { interior = false } = {}, wheelRadius = 0.34) 
   }
   const torso = put(box(0.36, 0.5, 0.26, paint), 0, 1.16, -0.18, tilt); torso.rotation.x = 0.55; hide.push(torso);
   for (const sx of [-1, 1]) { const arm = put(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.62, 8), paint), sx * 0.24, 1.12, 0.22, tilt); arm.rotation.x = 1.15; arm.rotation.z = sx * 0.12; }
-  const head = makeRiderHead(paint, skin); head.position.set(0, 1.28, -0.3); head.rotation.x = -0.15; tilt.add(head); hide.push(head);
+  // ★ 頭要接在**軀幹上緣**,不是擺在軀幹後面。軀幹前傾 0.55 rad,上緣中心 =
+  //   (0, 1.16 + 0.25·cos0.55, −0.18 + 0.25·sin0.55) = (0, 1.373, −0.049)。
+  //   原本寫 (0, 1.28, −0.30):比上緣還低 9cm、又往後 25cm ⇒ 頭長在背上(0908 使用者實玩回報)。
+  const head = makeRiderHead(paint, skin); head.position.set(0, 1.44, -0.04); head.rotation.x = -0.15; tilt.add(head); hide.push(head);
   // 影子
   const shadow = new THREE.Mesh(new THREE.CircleGeometry(1, 18), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false }));
   shadow.rotation.x = -Math.PI / 2; shadow.scale.set(0.6, 1.3, 1); shadow.position.y = 0.02; group.add(shadow);
@@ -218,7 +238,7 @@ export function makeRunnerRig(hex, { interior = false } = {}) {
   put(box(0.38, 0.22, 0.22, paint), 0, -0.06, 0, body);    // 腹
   put(box(0.4, 0.18, 0.23, dark), 0, -0.24, 0, body);      // 髖(短褲)
   hide.push(body);
-  const head = makeRiderHead(paint, skin); head.position.set(0, 1.42, 0); tilt.add(head); hide.push(head);
+  const head = makeRiderHead(paint, skin); head.position.set(0, 1.47, 0); tilt.add(head); hide.push(head);
   // 長腿(大腿+小腿+腳掌),pivot=髖
   const legs = [];
   for (const sx of [-1, 1]) {
@@ -300,7 +320,7 @@ export function makeHoverRig(hex, { interior = false } = {}) {
   rim.rotation.x = Math.PI / 2; rim.scale.set(1.05, 1.35, 1); hide.push(rim);
   const driver = new THREE.Group(); driver.position.set(0, 1.06, -0.05); tilt.add(driver); hide.push(driver);
   put(box(0.36, 0.32, 0.24, paint), 0, 0.02, 0, driver);
-  const head = makeRiderHead(paint, skin); head.position.set(0, 0.2, 0); driver.add(head);
+  const head = makeRiderHead(paint, skin); head.position.set(0, 0.25, 0); driver.add(head);
   // 影子
   const shadow = new THREE.Mesh(new THREE.CircleGeometry(1, 18), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false }));
   shadow.rotation.x = -Math.PI / 2; shadow.scale.set(1.0, 1.7, 1); shadow.position.y = 0.02; group.add(shadow);
@@ -385,7 +405,8 @@ export function makeHorseRig(hex, { interior = false } = {}) {
   }
   const torso = put(box(0.36, 0.5, 0.26, paint), 0, 2.3, 0.05, tilt); torso.rotation.x = 0.18; hide.push(torso);
   for (const sx of [-1, 1]) { const arm = put(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.5, 8), paint), sx * 0.2, 2.32, 0.3, tilt); arm.rotation.x = 1.25; }
-  const rHead = makeRiderHead(paint, skin); rHead.position.set(0, 2.56, 0.08); tilt.add(rHead); hide.push(rHead);
+  // 軀幹前傾 0.18 rad,上緣中心 (0, 2.546, 0.095);頭底再抬 5cm 給脖子站,脖子下端埋回軀幹裡
+  const rHead = makeRiderHead(paint, skin); rHead.position.set(0, 2.63, 0.09); tilt.add(rHead); hide.push(rHead);
   // 韁繩(手→嚼口),group 隨轉向微轉(cockpit.userData.wheel)
   const reins = new THREE.Group(); reins.position.set(0, 2.2, 0.45); tilt.add(reins);
   for (const sx of [-1, 1]) {

@@ -127,6 +127,37 @@ for (let i = 1; i <= 5; i++) {
 }
 await page.screenshot({ path: OUT + "03-vehicle-bar.png" });
 
+// ★ 0908 使用者實玩點名的三個人物毛病(追尾視角看到的)
+const figure = await page.evaluate(() => {
+  const g = window.__city3d;
+  const out = {};
+  for (const id of ["car", "moto", "horse", "run", "hover"]) {
+    g.setVehicle(id);
+    g.setCamView("chase");
+    for (let i = 0; i < 5; i++) g.update(1 / 60);
+    const cockpitShown = !!(g.rig.cockpit && g.rig.cockpit.visible);
+    g.setCamView("cockpit");
+    for (let i = 0; i < 5; i++) g.update(1 / 60);
+    const cockpitInFirstPerson = !!(g.rig.cockpit && g.rig.cockpit.visible);
+    let neck = 0, nape = 0;
+    g.rig.group.traverse((o) => { if (o.userData && o.userData.neck) neck++; if (o.userData && o.userData.napeGuard) nape++; });
+    out[id] = { hasCockpit: !!g.rig.cockpit, cockpitShown, cockpitInFirstPerson, neck, nape };
+    g.setCamView("chase");
+  }
+  return out;
+});
+for (const [id, f] of Object.entries(figure)) {
+  // ①「人的追尾視角前面怎會有速度面板」:第一人稱內裝只該在駕駛座視角看得到
+  ok(!f.hasCockpit || !f.cockpitShown, `${id}:追尾視角看不到第一人稱內裝(速度錶/儀表板)`);
+  // ★ 反面也要驗:只驗「藏起來」的話,把內裝整個刪掉也會全綠
+  ok(!f.hasCockpit || f.cockpitInFirstPerson, `${id}:駕駛座視角看得到內裝(沒有被一起藏掉)`);
+}
+// ②③ 有露出騎士的四型:要有脖子、後腦要有東西遮
+for (const id of ["moto", "horse", "run", "hover"]) {
+  ok(figure[id].neck >= 1, `${id}:騎士有脖子(找到 ${figure[id].neck} 段)`);
+  ok(figure[id].nape >= 1, `${id}:騎士後腦有安全帽護片(找到 ${figure[id].nape} 片)`);
+}
+
 // 五檔視角
 for (let i = 0; i < 5; i++) {
   await page.keyboard.press("v");
