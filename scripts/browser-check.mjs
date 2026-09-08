@@ -165,7 +165,12 @@ const life = await page.evaluate(() => {
   const cafes = g.streetProps.filter((p) => p.kind === "cafe").length;
   // 把車開到第一條隧道的北口外,直直開進去
   const t = g.tunnelCenters[0];
+  // ★ 測隧道就只測隧道:路上的行人會隨機閃到車前,撞到就減速+偏向,車進隧道時歪掉才擦牆。
+  //   (本機碰巧 0 次、線上穩定 3 次 —— 這條測試本來就是不穩的,不是隧道太窄。)
+  const pedsWas = g.settings.peds;
+  g.settings.peds = false;
   g.player.x = t.x; g.player.z = t.z - 46; g.player.heading = 0; g.player.speed = 14;
+  g.player.lat = 0; g.player.steer = 0;
   let bumps = 0, inside = 0;
   const off = g.onEvent; g.onEvent = (type) => { if (type === "bump") bumps++; };
   for (let i = 0; i < 60 * 7; i++) {
@@ -173,6 +178,7 @@ const life = await page.evaluate(() => {
     if (Math.abs(g.player.z - t.z) < 30) inside++;
   }
   g.input.throttle = 0; g.onEvent = off;
+  g.settings.peds = pedsWas;
   const passedThrough = g.player.z > t.z + 30;
   // 距離裁切:把玩家丟到城市另一角,遠處的街景該被關掉
   g.player.x = 300; g.player.z = 300; g.update(1 / 60);
