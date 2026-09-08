@@ -158,6 +158,37 @@ for (const id of ["moto", "horse", "run", "hover"]) {
   ok(figure[id].nape >= 1, `${id}:騎士後腦有安全帽護片(找到 ${figure[id].nape} 片)`);
 }
 
+// ★ 第二期:今日路線(0908 使用者點名的「任務」)
+const route = await page.evaluate(() => {
+  const g = window.__city3d;
+  const before = { idx: g.routeIdx, total: g.route.length, key: g.routeKey };
+  const first = g.nextStop();
+  const beaconAtStop = g._beacon ? (Math.hypot(g._beacon.position.x - first.x, g._beacon.position.z - first.z) < 0.01) : false;
+  const beaconOn = !!(g._beacon && g._beacon.visible);
+  // 直接把車開到第一站,應該要「到站」並換下一站
+  g.player.x = first.x; g.player.z = first.z; g.player.speed = 0;
+  g.update(1 / 60);
+  const afterOne = { idx: g.routeIdx, next: g.nextStop() ? g.nextStop().label : null };
+  // 把剩下的站一個一個走完
+  let guard = 0;
+  while (g.nextStop() && guard++ < 20) {
+    const s = g.nextStop();
+    g.player.x = s.x; g.player.z = s.z;
+    g.update(1 / 60);
+  }
+  const done = { routeDone: g.routeDone, idx: g.routeIdx, beaconOff: !!(g._beacon && !g._beacon.visible) };
+  const h = g.hud();
+  return { before, first: first.label, beaconAtStop, beaconOn, afterOne, done, hudRoute: h.route.length, hudDoneCount: h.route.filter((r) => r.done).length };
+});
+ok(route.before.total >= 4, `今日路線有 ${route.before.total} 站`);
+ok(/^\d{4}-\d{2}-\d{2}$/.test(route.before.key), `路線的日期鍵是本地日期格式(${route.before.key})`);
+ok(route.beaconOn && route.beaconAtStop, "場上有一根光柱,而且就立在下一站上");
+ok(route.afterOne.idx === 1 && route.afterOne.next, `開到第一站就算到站、換下一站(${route.afterOne.next})`);
+ok(route.done.routeDone === true, "五站全部走完會標記完成");
+ok(route.done.idx === route.before.total, `走完的站數對得上(${route.done.idx}/${route.before.total})`);
+ok(route.done.beaconOff, "走完之後光柱收起來(不會留一根在最後一站)");
+ok(route.hudDoneCount === route.hudRoute, `HUD 的進度點全部點亮(${route.hudDoneCount}/${route.hudRoute})`);
+
 // ★ 第二期:隧道與街邊生活(0908 使用者點名)
 const life = await page.evaluate(() => {
   const g = window.__city3d;

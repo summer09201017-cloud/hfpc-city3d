@@ -183,6 +183,63 @@ export function resolveBuilding(buildings, x, z, radius = 1.1) {
   return { hit: true, nx, nz, speedMul: 0.45, axis };
 }
 
+/* ── 🗺 今日路線(0908 使用者第二期的「任務」)────────────────────────
+   自由漫遊不該有「你必須做」的任務,所以這裡做的是**建議路線**:
+   每天由日期決定五個地標,依序造訪,HUD 告訴你下一站在哪、還有幾公尺。
+   不去也沒關係,城照樣隨你逛;去完了灑彩帶。全班同一天拿到同一條路線。 */
+export const ARRIVE_R = 13;      // 進到幾公尺內算到站
+
+/** 都市裡所有值得去的點(廣場、公園、隧道口、市中心噴水池)。決定性,不吃亂數。 */
+export function buildLandmarks() {
+  const out = [];
+  const mid = [Math.floor(CITY.cols / 2), Math.floor(CITY.rows / 2)];
+  CITY.plazas.forEach(([c, r], i) => {
+    const p = blockCenter(c, r);
+    const isMid = c === mid[0] && r === mid[1];
+    out.push({
+      id: `plaza-${c}-${r}`, kind: "plaza",
+      label: isMid ? "市中心大廣場" : `第 ${i + 1} 廣場`,
+      emoji: isMid ? "⛲" : "🏛️", x: p.x, z: p.z,
+    });
+  });
+  CITY.parks.forEach(([c, r], i) => {
+    const p = blockCenter(c, r);
+    out.push({ id: `park-${c}-${r}`, kind: "park", label: `第 ${i + 1} 公園`, emoji: "🌳", x: p.x, z: p.z });
+  });
+  CITY.tunnels.forEach(([c, r], i) => {
+    const p = blockCenter(c, r);
+    out.push({ id: `tunnel-${c}-${r}`, kind: "tunnel", label: `第 ${i + 1} 號隧道`, emoji: "🚇", x: p.x, z: p.z });
+  });
+  return out;
+}
+
+/** 今天的日期字串(本地時區;★ 不可以用 toISOString,那是 UTC,台灣半夜會跳成前一天)。 */
+export function todayKey(d = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function hashStr(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h * 0x01000193) >>> 0; }
+  return h >>> 0;
+}
+
+/**
+ * 今日路線:從地標裡挑 n 個排成順序。同一天同一條(全班一樣),換一天就換一條。
+ * ★ 用日期 hash 當種子,不用 Math.random —— 不然重新整理就換一條,「今日」就沒意義了。
+ */
+export function dailyRoute(key = todayKey(), n = 5) {
+  const all = buildLandmarks();
+  const rnd = mulberry32(hashStr(key));
+  const pool = all.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    const t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+  }
+  return pool.slice(0, Math.min(n, pool.length));
+}
+
 /* ── 🍢 街邊生活(0908 使用者:「人行道上有路邊攤販叫賣小吃、有路邊餐桌椅,有人坐著喝咖啡吃下午茶」)
    攤子與桌椅擺在**人行道**上,純景觀:不擋路、不判定 —— 車照樣開得過去(這座城的規則沒變)。
    位置決定性生成,每次開都一樣,孩子記得住「那攤蚵仔煎在哪」。 */

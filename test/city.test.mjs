@@ -8,6 +8,7 @@ import {
   worldSize, blockCenter, blockAt, isPlaza, isPark, surfaceAt,
   buildBuildings, buildingAt, resolveBuilding,
   buildPedestrians, stepPedestrians, nearestRoadPoint, roadCenter, isTunnel, buildStreetProps, STALL_KINDS,
+  buildLandmarks, dailyRoute, todayKey, ARRIVE_R,
 } from "../src/city.js";
 
 let pass = 0;
@@ -262,7 +263,59 @@ test("露天座的座位數與入座比例都是合法數字", () => {
   }
 });
 
-/* ⑤ 救援落點 */
+/* ⑤ 今日路線 */
+test("★ 地標:每個都有中文名與 emoji、座標在城內、而且不重複", () => {
+  const ls = buildLandmarks();
+  assert.ok(ls.length >= 8, `地標只有 ${ls.length} 個,路線挑不出五站`);
+  const { w, h } = worldSize();
+  const ids = new Set();
+  for (const l of ls) {
+    assert.ok(typeof l.label === "string" && l.label.length > 0, "地標沒有中文名(HUD 會印 undefined)");
+    assert.ok(typeof l.emoji === "string" && l.emoji.length > 0, `${l.label} 沒有 emoji`);
+    assert.ok(Number.isFinite(l.x) && Number.isFinite(l.z), `${l.label} 座標壞掉`);
+    assert.ok(Math.abs(l.x) <= w / 2 && Math.abs(l.z) <= h / 2, `${l.label} 在城外`);
+    assert.ok(!ids.has(l.id), `地標 id 重複:${l.id}`);
+    ids.add(l.id);
+  }
+});
+
+test("★ 今日路線:同一天同一條(全班一樣)、換一天換一條", () => {
+  const a = dailyRoute("2026-09-08"), b = dailyRoute("2026-09-08"), c = dailyRoute("2026-09-09");
+  assert.deepEqual(a.map((r) => r.id), b.map((r) => r.id), "同一天卻給出不同路線");
+  assert.notDeepEqual(a.map((r) => r.id), c.map((r) => r.id), "換一天卻還是同一條");
+  assert.equal(a.length, 5);
+});
+
+test("路線裡不會出現重複的站(走到一半發現又要回去同一個地方)", () => {
+  for (const key of ["2026-09-08", "2026-01-01", "2026-12-31", "2027-06-15"]) {
+    const ids = dailyRoute(key).map((r) => r.id);
+    assert.equal(new Set(ids).size, ids.length, `${key} 的路線有重複站:${ids.join(",")}`);
+  }
+});
+
+test("連續 60 天的路線都給得出來,而且不是每天都一樣", () => {
+  const seen = new Set();
+  for (let i = 0; i < 60; i++) {
+    const d = new Date(2026, 8, 8 + i);
+    const r = dailyRoute(todayKey(d));
+    assert.equal(r.length, 5, `${todayKey(d)} 只給了 ${r.length} 站`);
+    seen.add(r.map((x) => x.id).join("|"));
+  }
+  assert.ok(seen.size > 30, `60 天只有 ${seen.size} 種路線,太常重複`);
+});
+
+test("todayKey 用本地日期,不是 UTC(台灣半夜會跳成前一天)", () => {
+  // 台北時間 2026-09-08 00:30 → UTC 還是 09-07;本地鍵必須是 09-08
+  const d = new Date(2026, 8, 8, 0, 30, 0);
+  assert.equal(todayKey(d), "2026-09-08");
+  assert.match(todayKey(), /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test("到站半徑合理:不會遠遠就算到、也不用開進去撞牆", () => {
+  assert.ok(ARRIVE_R >= 8 && ARRIVE_R <= 25, `到站半徑 ${ARRIVE_R} 公尺不合理`);
+});
+
+/* ⑥ 救援落點 */
 test("卡住救援一定放回馬路上", () => {
   const { w, h } = worldSize();
   for (let i = 0; i < 60; i++) {

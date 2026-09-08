@@ -18,6 +18,8 @@ const ui = {
   canvas: $("gameCanvas"),
   tripCard: $("tripCard"), vehicleText: $("vehicleText"), surfaceText: $("surfaceText"), distText: $("distText"), blockText: $("blockText"),
   miniWrap: $("miniWrap"), miniMap: $("miniMap"), viewTag: $("viewTag"),
+  routeCard: $("routeCard"), routeTitle: $("routeTitle"), routeDots: $("routeDots"),
+  routeArrow: $("routeArrow"), routeNext: $("routeNext"), routeDist: $("routeDist"),
   speedPanel: $("speedPanel"), speedText: $("speedText"), turboRow: $("turboRow"), turboFill: $("turboFill"), turboLabel: $("turboLabel"), speedHint: $("speedHint"),
   statusMessage: $("statusMessage"), vehicleBar: $("vehicleBar"),
   tLeft: $("tLeft"), tRight: $("tRight"), tGas: $("tGas"), tBrake: $("tBrake"), tBoost: $("tBoost"),
@@ -332,6 +334,18 @@ function drawMini(hud) {
   c.drawImage(miniBase, 0, 0);
   c.fillStyle = "rgba(255,255,255,0.75)";
   for (const p of hud.peds) { const [x, y] = miniXY(p.x, p.z); c.fillRect(x - 0.8, y - 0.8, 1.6, 1.6); }
+  // ⭐ 下一站
+  if (hud.nextStop) {
+    const [sx, sy] = miniXY(hud.nextStop.x, hud.nextStop.z);
+    c.fillStyle = "#ffd479"; c.strokeStyle = "#3a2c10"; c.lineWidth = 1.2;
+    c.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = (Math.PI / 5) * i - Math.PI / 2, rr = i % 2 === 0 ? 6.5 : 2.8;
+      const px = sx + Math.cos(a) * rr, py = sy + Math.sin(a) * rr;
+      if (i === 0) c.moveTo(px, py); else c.lineTo(px, py);
+    }
+    c.closePath(); c.fill(); c.stroke();
+  }
   // 🅿 停在原地的載具:走遠了要找得回來,不然「下車」等於把車弄丟
   if (hud.parked) {
     const [px, py] = miniXY(hud.parked.x, hud.parked.z);
@@ -347,12 +361,41 @@ function drawMini(hud) {
   c.beginPath(); c.arc(cx, cy, hud.onFoot ? 3.5 : 4.5, 0, Math.PI * 2); c.fill(); c.stroke();
 }
 
+/* ── 🗺 今日路線卡 ── */
+const ARROWS = ["↑", "↗", "→", "↘", "↓", "↙", "←", "↖"];
+function drawRoute(hud) {
+  if (ui.routeDots.childElementCount !== hud.route.length) {
+    ui.routeDots.innerHTML = "";
+    for (let i = 0; i < hud.route.length; i++) ui.routeDots.appendChild(document.createElement("i"));
+  }
+  const dots = ui.routeDots.children;
+  for (let i = 0; i < hud.route.length; i++) dots[i].className = hud.route[i].done ? "done" : "";
+  ui.routeCard.classList.toggle("done", !!hud.routeDone);
+  if (hud.routeDone || !hud.nextStop) {
+    ui.routeTitle.textContent = "今日路線";
+    ui.routeArrow.textContent = "✓";
+    ui.routeNext.textContent = "五站全走完了";
+    ui.routeDist.textContent = "明天會換一條新的";
+    return;
+  }
+  ui.routeTitle.textContent = `今日路線 ${hud.routeIdx + 1}/${hud.route.length}`;
+  ui.routeNext.textContent = `${hud.nextStop.emoji} ${hud.nextStop.label}`;
+  ui.routeDist.textContent = `還有 ${hud.stopDist} 公尺`;
+  // 方向箭頭:目標相對「車頭」的方位,不是相對北方 —— 玩家要的是「往左還是往右」
+  if (hud.car) {
+    const rel = Math.atan2(hud.nextStop.x - hud.car.x, hud.nextStop.z - hud.car.z) - hud.car.heading;
+    const idx = ((Math.round(rel / (Math.PI / 4)) % 8) + 8) % 8;
+    ui.routeArrow.textContent = ARROWS[idx];
+  }
+}
+
 /* ── HUD ── */
 let flashTimer = 0;
 function flashMessage(text) { ui.statusMessage.textContent = text; flashTimer = 2.5; }
 game.onHud = (hud) => {
   const driving = hud.phase === "driving";
   ui.tripCard.hidden = !driving; ui.miniWrap.hidden = !driving; ui.speedPanel.hidden = !driving; ui.vehicleBar.hidden = !driving;
+  ui.routeCard.hidden = !driving;
   if (driving) {
     const v = VEHICLES[hud.vehicle] || VEHICLES.car;
     // 走路是「暫時離開載具」的狀態,不是第六種載具 ⇒ HUD 直接說走路,快捷列灰掉
@@ -376,6 +419,7 @@ game.onHud = (hud) => {
     ui.turboRow.classList.toggle("tired", !!hud.tired);
     ui.turboRow.classList.toggle("boosting", !!hud.boosting);
     ui.viewTag.textContent = `視角:${hud.camLabel}`;
+    drawRoute(hud);
     drawMini(hud);
   }
   if (flashTimer <= 0 && hud.message) ui.statusMessage.textContent = hud.message;
@@ -389,6 +433,8 @@ game.onEvent = (type, d) => {
   else if (type === "rescue") audio.rescue();
   else if (type === "ped") audio.wrongWay();
   else if (type === "surface") audio.offtrack();
+  else if (type === "stop") { audio.rescue(); flashMessage(`✅ 到 ${d.reached.emoji} ${d.reached.label}(${d.index}/${d.total})`); }
+  else if (type === "routedone") { celebrate({ count: 220, duration: 3200, origin: "top" }); flashMessage("🎉 今日路線全部走完了!"); }
   else if (type === "view") syncAgeButtons();
   else if (type === "vehicle") {
     // ★ 一律以遊戲為準回頭校正 UI:任何不經 switchVehicle 的換車路徑,快捷列都不會亮錯顆

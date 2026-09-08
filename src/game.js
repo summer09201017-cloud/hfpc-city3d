@@ -7,7 +7,7 @@
 //   ③ 隨時換載具 —— 停下來按一顆鈕就換(車 / 摩托車 / 馬 / 跑步 / 懸浮車)
 // ★ 沿用 racing3d 的鐵則:this.running 只給 RAF;mesh.visible 一律嚴格 boolean;鏡頭狀態建構子就有數字。
 import * as THREE from "three";
-import { CITY, SURFACES, worldSize, blockCenter, roadCenter, isPlaza, isPark, isTunnel, buildBuildings, buildPedestrians, stepPedestrians, surfaceAt, nearestRoadPoint, buildStreetProps, PED } from "./city.js";
+import { CITY, SURFACES, worldSize, blockCenter, roadCenter, isPlaza, isPark, isTunnel, buildBuildings, buildPedestrians, stepPedestrians, surfaceAt, nearestRoadPoint, buildStreetProps, dailyRoute, todayKey, ARRIVE_R, PED } from "./city.js";
 import { CAR, DIFFICULTY, createCar, placeAt, stepCar, emptyInput, resolveCollisions, rpm01, kmh, clamp, wrapAngle, forwardOf, rightOf } from "./vehicle.js";
 import { VEHICLES, VEHICLE_IDS, vehicleParams } from "./vehicles.js";
 import { makeCarRig, makeMotoRig, makeHorseRig, makeHoverRig, makeRunnerRig } from "./rigs.js";
@@ -80,6 +80,10 @@ export class CityGame {
     this.pedBumps = 0;
 
     this.streetGroups = [];         // 街邊擺設的群組(距離裁切用)
+    this.routeKey = todayKey();     // 今日路線是哪一天的
+    this.route = dailyRoute(this.routeKey);
+    this.routeIdx = 0;              // 下一站是第幾個(= route.length 表示走完了)
+    this.routeDone = false;
     this.onFoot = false;            // 現在是不是用兩條腿(下車走路)
     this.parked = null;             // 停在原地的載具 { vehicle, x, z, heading, rig }
     this.buildings = buildBuildings();
@@ -162,6 +166,7 @@ export class CityGame {
     }
     // 街道中央的白虛線(讓「這是馬路」看得出來)
     this._buildRoadMarks(scene);
+    this._buildRoadDetail(scene);
     this._buildTunnels(scene);
     this._buildStreetLife(scene);
     this._buildBuildings(scene);
@@ -193,6 +198,125 @@ export class CityGame {
   }
 
   /** 🚇 隧道:兩道側牆(牆本身是建築、會擋路)+ 頂蓋 + 兩排燈條 + 兩端門框。 */
+  /**
+   * 🛣 道路網細化(0908 使用者「道路網細化」)——**全部是視覺**,不動幾何也不動物理:
+   * 緣石、斑馬線、停止線、主幹道雙黃線、路燈、路口紅綠燈。
+   * ★ 刻意不改街道寬度:blockCenter / roadCenter / surfaceAt / 建築配置全部吃同一組數字,
+   *   動寬度等於重算整座城,而使用者要的「細化」看的是路面長什麼樣。
+   * ★★ 一律用 InstancedMesh:這些東西是「同一個小物擺幾百次」,逐個建 Mesh 會做出
+   *   約 5800 個物件、實測掉到 31 fps;instanced 之後同樣的內容只剩十幾個 draw call、回到 60。
+   */
+  _buildRoadDetail(scene) {
+    const g = CITY.block + CITY.road, { w, h } = worldSize();
+    const half = CITY.road / 2;
+    const _m4 = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion();
+    const _e = new THREE.Euler(), _s = new THREE.Vector3(1, 1, 1);
+    /** items = [[x, y, z, rx, ry, rz]];一次建成一個 InstancedMesh。 */
+    const instanced = (geometry, material, items) => {
+      if (!items.length) return null;
+      const im = new THREE.InstancedMesh(geometry, material, items.length);
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        _p.set(it[0], it[1], it[2]);
+        _e.set(it[3] || 0, it[4] || 0, it[5] || 0);
+        _q.setFromEuler(_e);
+        im.setMatrixAt(i, _m4.compose(_p, _q, _s));
+      }
+      im.instanceMatrix.needsUpdate = true;
+      im.frustumCulled = false;   // 這一批橫跨全城,整體 culling 沒意義、還可能誤裁
+      scene.add(im);
+      return im;
+    };
+
+    const kerbMat = lambert(0xc9ccd2), zebraMat = new THREE.MeshBasicMaterial({ color: 0xf4f4f0 });
+    const yellowMat = new THREE.MeshBasicMaterial({ color: 0xe8c33a });
+    const poleMat = lambert(0x596070), lampMat = new THREE.MeshBasicMaterial({ color: 0xfff3cf });
+    const boxMat = lambert(0x2b3038);
+    const FLAT = -Math.PI / 2;
+
+    // ① 緣石:每個街廓外圍一圈矮邊條 —— 人行道與馬路的界線一眼看得出來
+    const kerbH = 0.16, kerbW = 0.5;
+    const kerbLongItems = [], kerbSideItems = [];
+    for (let r = 0; r < CITY.rows; r++) {
+      for (let c = 0; c < CITY.cols; c++) {
+        if (isTunnel(c, r)) continue;                 // 隧道格中間是通道,不圍
+        const p = blockCenter(c, r);
+        for (const sz of [-1, 1]) kerbLongItems.push([p.x, kerbH / 2, p.z + sz * (CITY.block / 2 + kerbW / 2)]);
+        for (const sx of [-1, 1]) kerbSideItems.push([p.x + sx * (CITY.block / 2 + kerbW / 2), kerbH / 2, p.z]);
+      }
+    }
+    instanced(new THREE.BoxGeometry(CITY.block + kerbW * 2, kerbH, kerbW), kerbMat, kerbLongItems);
+    instanced(new THREE.BoxGeometry(kerbW, kerbH, CITY.block), kerbMat, kerbSideItems);
+
+    // ② 斑馬線 + 停止線 + ⑤ 紅綠燈:每個路口一組
+    const zebraA = [], zebraB = [], stopA = [], stopB = [];
+    const tlPole = [], tlBox = [], tlRed = [], tlAmber = [], tlGreen = [];
+    for (let i = 1; i <= CITY.cols; i++) {
+      for (let j = 1; j <= CITY.rows; j++) {
+        const ix = -w / 2 + i * g - half, iz = -h / 2 + j * g - half;   // 路口中心
+        for (const sz of [-1, 1]) {
+          for (let k = -3; k <= 3; k++) zebraA.push([ix, 0.035, iz + sz * (half + 1.6) + k * 1.15, FLAT]);
+          stopA.push([ix, 0.035, iz + sz * (half + 5.4), FLAT]);
+        }
+        for (const sx of [-1, 1]) {
+          for (let k = -3; k <= 3; k++) zebraB.push([ix + sx * (half + 1.6) + k * 1.15, 0.035, iz, FLAT]);
+          stopB.push([ix + sx * (half + 5.4), 0.035, iz, FLAT]);
+        }
+        // 對角兩支就夠(四支太密、也太吃 draw call)
+        for (const d of [[-1, -1], [1, 1]]) {
+          const px = ix + d[0] * (half + 1.2), pz = iz + d[1] * (half + 1.2);
+          tlPole.push([px, 1.8, pz]);
+          tlBox.push([px, 3.7, pz]);
+          tlRed.push([px, 3.98, pz + 0.16]);
+          tlAmber.push([px, 3.7, pz + 0.16]);
+          tlGreen.push([px, 3.42, pz + 0.16]);
+        }
+      }
+    }
+    instanced(new THREE.PlaneGeometry(CITY.road - 3, 0.62), zebraMat, zebraA);
+    instanced(new THREE.PlaneGeometry(0.62, CITY.road - 3), zebraMat, zebraB);
+    instanced(new THREE.PlaneGeometry(CITY.road - 2, 0.4), zebraMat, stopA);
+    instanced(new THREE.PlaneGeometry(0.4, CITY.road - 2), zebraMat, stopB);
+    instanced(new THREE.CylinderGeometry(0.09, 0.11, 3.6, 8), poleMat, tlPole);
+    instanced(new THREE.BoxGeometry(0.34, 0.86, 0.3), boxMat, tlBox);
+    const lens = new THREE.CircleGeometry(0.1, 10);
+    instanced(lens, new THREE.MeshBasicMaterial({ color: 0xe5453a }), tlRed);
+    instanced(lens, new THREE.MeshBasicMaterial({ color: 0xe8a33a }), tlAmber);
+    instanced(lens, new THREE.MeshBasicMaterial({ color: 0x49c26a }), tlGreen);
+
+    // ③ 主幹道:每 3 條街挑一條,中央畫雙黃線(看起來就是大道)
+    const yA = [], yB = [];
+    for (let i = 1; i <= CITY.cols; i++) {
+      if (i % 3 !== 0) continue;
+      const x = -w / 2 + i * g - half;
+      for (let z = -h / 2 + 4; z < h / 2; z += 9) for (const sx of [-1, 1]) yA.push([x + sx * 0.22, 0.034, z, FLAT]);
+    }
+    for (let j = 1; j <= CITY.rows; j++) {
+      if (j % 3 !== 0) continue;
+      const z = -h / 2 + j * g - half;
+      for (let x = -w / 2 + 4; x < w / 2; x += 9) for (const sz of [-1, 1]) yB.push([x, 0.034, z + sz * 0.22, FLAT]);
+    }
+    instanced(new THREE.PlaneGeometry(0.22, 6.5), yellowMat, yA);
+    instanced(new THREE.PlaneGeometry(6.5, 0.22), yellowMat, yB);
+
+    // ④ 路燈:沿著街道每 26 公尺一盞,擺在人行道側
+    const lpPole = [], lpArm = [], lpHead = [];
+    for (let i = 1; i <= CITY.cols; i++) {
+      const x = -w / 2 + i * g - half;
+      for (let z = -h / 2 + 13; z < h / 2; z += 26) {
+        for (const sx of [-1, 1]) {
+          const px = x + sx * (half + 0.9);
+          lpPole.push([px, 2.6, z]);
+          lpArm.push([px - sx * 0.75, 5.1, z]);
+          lpHead.push([px - sx * 1.4, 5.02, z]);
+        }
+      }
+    }
+    instanced(new THREE.CylinderGeometry(0.1, 0.13, 5.2, 8), poleMat, lpPole);
+    instanced(new THREE.BoxGeometry(1.5, 0.11, 0.14), poleMat, lpArm);
+    instanced(new THREE.BoxGeometry(0.7, 0.16, 0.32), lampMat, lpHead);
+  }
+
   _buildTunnels(scene) {
     const wallMat = lambert(0x8d8779), roofMat = lambert(0x6f6a5e), trimMat = lambert(0x3c3a34);
     const lampMat = new THREE.MeshBasicMaterial({ color: 0xfff2c4 });
@@ -602,6 +726,8 @@ export class CityGame {
   beginDrive() {
     this._clearFoot();
     this.phase = "driving"; this.distance = 0; this.pedBumps = 0; this.visited.clear();
+    this.routeKey = todayKey(); this.route = dailyRoute(this.routeKey); this.routeIdx = 0; this.routeDone = false;
+    this._syncBeacon();
     this.say("想去哪就去哪 —— 人行道、廣場、公園都能開,按 F 可以下車走走", 4);
     this.pushHud();
   }
@@ -643,6 +769,7 @@ export class CityGame {
         car.startBoostT = Math.max(0, car.startBoostT - dt);
       } else evs = stepCar(car, input, dt, cfg, this.buildings, {});
       for (const e of evs) this._onEvent(car, e);
+      if (this.phase === "driving") this._checkRoute();
       if (this.phase === "driving") {
         this.distance += Math.hypot(car.x - before.x, car.z - before.z);
         const b = this._blockOf(car.x, car.z);
@@ -671,6 +798,52 @@ export class CityGame {
     const c = Math.floor((x + w / 2) / g), r = Math.floor((z + h / 2) / g);
     if (c < 0 || r < 0 || c >= CITY.cols || r >= CITY.rows) return null;
     return `${c},${r}`;
+  }
+
+  /** 下一站(走完了回 null)。 */
+  nextStop() { return this.routeIdx < this.route.length ? this.route[this.routeIdx] : null; }
+
+  /** 到下一站還有幾公尺(走完了回 0)。 */
+  distToStop() {
+    const s = this.nextStop();
+    if (!s || !this.player) return 0;
+    return Math.hypot(this.player.x - s.x, this.player.z - s.z);
+  }
+
+  /** 每幀檢查有沒有到站。到了就換下一站,全部走完灑彩帶(事件交給呼叫端)。 */
+  _checkRoute() {
+    const s = this.nextStop();
+    if (!s || !this.player) return;
+    if (this.distToStop() > ARRIVE_R) return;
+    this.routeIdx++;
+    const next = this.nextStop();
+    if (next) {
+      this.say(`✅ 到 ${s.emoji} ${s.label} 了!下一站:${next.emoji} ${next.label}`, 3.5);
+      this._emit("stop", { reached: s, next, index: this.routeIdx, total: this.route.length });
+    } else {
+      this.routeDone = true;
+      this.say(`🎉 今日路線全部走完了!${this.route.length} 站,厲害`, 5);
+      this._emit("routedone", { total: this.route.length });
+    }
+    this._syncBeacon();
+    this.pushHud();
+  }
+
+  /** 目標光柱:下一站的位置立一根看得到的柱子(遠遠就找得到方向)。 */
+  _syncBeacon() {
+    if (!this.scene) return;
+    const s = this.nextStop();
+    if (!this._beacon) {
+      const g = new THREE.Group();
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffd479, transparent: true, opacity: 0.42 });
+      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2.6, 26, 12, 1, true), mat);
+      pillar.position.y = 13; g.add(pillar);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(4.2, 0.35, 8, 26), new THREE.MeshBasicMaterial({ color: 0xffd479 }));
+      ring.rotation.x = Math.PI / 2; ring.position.y = 0.12; g.add(ring);
+      this._beacon = g; this.scene.add(g);
+    }
+    this._beacon.visible = !!s;
+    if (s) this._beacon.position.set(s.x, 0, s.z);
   }
 
   /** 展示/驗收用的自動駕駛:沿路蛇行,快到城界就轉回市中心(不然四秒就開出城,量到的都是邊緣)。 */
@@ -860,6 +1033,11 @@ export class CityGame {
       onFoot: this.onFoot,
       parked: this.parked ? { x: this.parked.x, z: this.parked.z, vehicle: this.parked.vehicle, label: VEHICLES[this.parked.vehicle].label, emoji: VEHICLES[this.parked.vehicle].emoji } : null,
       canMount: this.canMount(),
+      route: this.route.map((r, i) => ({ label: r.label, emoji: r.emoji, x: r.x, z: r.z, done: i < this.routeIdx })),
+      routeIdx: this.routeIdx,
+      routeDone: this.routeDone,
+      nextStop: this.nextStop() ? { label: this.nextStop().label, emoji: this.nextStop().emoji, x: this.nextStop().x, z: this.nextStop().z } : null,
+      stopDist: Math.round(this.distToStop()),
       camView: this.cam.view, camLabel: CAM_LABELS[this.cam.view],
       distance: Math.round(this.distance),
       blocks: this.visited.size, totalBlocks: CITY.cols * CITY.rows,

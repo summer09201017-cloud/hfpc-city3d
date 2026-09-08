@@ -267,3 +267,22 @@ option { background: #1a2338; color: #eef2f8; }
 /* 🚶 下車走路:快捷列在走路時灰掉(換載具要先上車),下車鈕亮起 */
 .vehicle-bar.dimmed { opacity: 0.38; filter: grayscale(0.6); pointer-events: none; }
 #footButton.on { border-color: #5ad1ff; background: rgba(90, 209, 255, 0.2); }
+
+/* 🗺 今日路線卡(左上,行程卡下面) */
+.route-card {
+  position: absolute; top: 188px; left: 62px; z-index: 20;
+  min-width: 216px; max-width: 300px; padding: 10px 13px;
+  border-radius: 13px; background: rgba(14, 19, 30, 0.82);
+  border: 1px solid rgba(255, 212, 121, 0.35);
+  color: #eef3ff; line-height: 1.35;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+.route-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.76rem; opacity: 0.78; }
+.route-dots { display: flex; gap: 4px; }
+.route-dots i { width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, 0.28); display: block; }
+.route-dots i.done { background: #ffd479; }
+.route-next { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 1.02rem; font-weight: 700; }
+.route-arrow { font-size: 1.25rem; color: #ffd479; display: inline-block; }
+.route-dist { font-size: 0.8rem; opacity: 0.8; margin-top: 2px; }
+.route-card.done { border-color: rgba(120, 220, 150, 0.5); }
+.route-card.done .route-arrow { color: #7cdc96; }
