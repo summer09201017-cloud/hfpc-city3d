@@ -304,6 +304,37 @@ ok(await page.evaluate(() => !!document.querySelector("[data-hfpc-lobby]")), "�
 await page.click("#menuButton");
 await page.waitForTimeout(400);
 ok(await page.isVisible("#homeScreen.visible"), "回選單");
+// ★ 手機尺寸下首頁選單不可以被切,而且捲到底一定構得到主要按鈕。
+//   判準照 memory flex-center-overflow-clips-top:scrollTop=0 之後量 rect.top,負值就是被切;
+//   看截圖不算數。連「版本簡歷全展開」的最長情況一起驗(那是內容最長的時候)。
+await page.click("#menuButton").catch(() => {});
+await page.waitForTimeout(300);
+for (const [vw, vh, label] of [[844, 390, "橫向 844×390"], [390, 844, "直向 390×844"]]) {
+  await page.setViewportSize({ width: vw, height: vh });
+  await page.waitForTimeout(350);
+  for (const expand of [false, true]) {
+    const m = await page.evaluate((wantOpen) => {
+      for (const d of document.querySelectorAll("details")) d.open = wantOpen;
+      const card = document.querySelector(".home-card");
+      const start = document.querySelector("#startButton");
+      if (!card || !start) return null;
+      card.scrollTop = 0;
+      const top = Math.round(card.getBoundingClientRect().top);
+      card.scrollTop = card.scrollHeight;
+      const r = start.getBoundingClientRect();
+      return { top, sTop: Math.round(r.top), sBottom: Math.round(r.bottom), winH: innerHeight, contentH: card.scrollHeight };
+    }, expand);
+    const tag = `${label}${expand ? "・簡歷全展開" : ""}`;
+    ok(!!m, `${tag}:找得到首頁卡片與出發鈕`);
+    if (!m) continue;
+    ok(m.top >= 0, `${tag}:卡片上緣沒被切(top ${m.top}px,內容 ${m.contentH}px)`);
+    ok(m.sTop >= 0 && m.sBottom <= m.winH, `${tag}:捲到底構得到「出發」(${m.sTop}~${m.sBottom} / 窗高 ${m.winH})`);
+  }
+}
+await page.evaluate(() => { for (const d of document.querySelectorAll("details")) d.open = false; });
+await page.setViewportSize({ width: 1280, height: 720 });
+await page.waitForTimeout(300);
+
 ok(errors.length === 0, `0 pageerror(${errors.length})`);
 for (const e of errors) console.log("   ", e);
 await browser.close();
