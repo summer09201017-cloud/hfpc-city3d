@@ -89,6 +89,42 @@ test("換地面會發事件(HUD 才知道要換字)", () => {
   }
 });
 
+test("★ 隧道:從北口一路開到南口出來,全程不撞牆", () => {
+  const [c, r] = CITY.tunnels[0];
+  const p = blockCenter(c, r);
+  const start = p.z - CITY.block / 2 - CITY.road / 2;      // 北邊那條街上
+  const car = createCar({ vehicle: "car", params: vehicleParams("car") });
+  placeAt(car, p.x, start, 0);                              // 朝 +z(南)
+  const input = { ...emptyInput(), throttle: 1 };
+  let bumps = 0, sawTunnel = false;
+  for (let i = 0; i < 60 * 8; i++) {
+    for (const e of stepCar(car, input, 1 / 60, CFG, BUILDINGS, { noRescue: true })) {
+      if (e.type === "bump") bumps++;
+    }
+    if (Math.abs(car.z - p.z) < CITY.block / 2) sawTunnel = true;   // 真的進到隧道格裡了
+  }
+  assert.ok(sawTunnel, "車根本沒開進隧道格,測試無效");
+  assert.equal(bumps, 0, `穿隧道撞了 ${bumps} 次牆 —— 通道應該夠寬、而且直直的`);
+  assert.ok(car.z > p.z + CITY.block / 2, `八秒還沒開出南口(z=${car.z.toFixed(1)},南口在 ${(p.z + CITY.block / 2).toFixed(1)})`);
+  assert.ok(car.speed > 10, `在隧道裡被拖慢了(${kmh(car.speed)} km/h)`);
+});
+
+test("隧道的側牆真的擋得住:貼著牆往外開會被推回來", () => {
+  const [c, r] = CITY.tunnels[0];
+  const p = blockCenter(c, r);
+  const car = createCar({ vehicle: "car", params: vehicleParams("car") });
+  placeAt(car, p.x, p.z, Math.PI / 2);                      // 站在通道中央,朝東(+x)撞牆
+  const input = { ...emptyInput(), throttle: 1 };
+  let bumped = false;
+  for (let i = 0; i < 60 * 4; i++) {
+    for (const e of stepCar(car, input, 1 / 60, CFG, BUILDINGS, { noRescue: true })) {
+      if (e.type === "bump") bumped = true;
+    }
+  }
+  assert.ok(bumped, "朝側牆直衝四秒卻沒撞到 —— 牆沒進碰撞");
+  assert.ok(Math.abs(car.x - p.x) <= CITY.tunnelWidth / 2 + 1.2, `被推出通道了(x 偏移 ${(car.x - p.x).toFixed(2)})`);
+});
+
 /* ── ② 建築:唯一真的擋路的東西 ── */
 test("撞到建築會掉速、會發 bump,而且車不會留在牆裡", () => {
   const b = BUILDINGS.find((q) => q.h > 12);

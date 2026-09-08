@@ -158,10 +158,45 @@ for (const id of ["moto", "horse", "run", "hover"]) {
   ok(figure[id].nape >= 1, `${id}:騎士後腦有安全帽護片(找到 ${figure[id].nape} 片)`);
 }
 
+// ★ 第二期:隧道與街邊生活(0908 使用者點名)
+const life = await page.evaluate(() => {
+  const g = window.__city3d;
+  const stalls = g.streetProps.filter((p) => p.kind === "stall").length;
+  const cafes = g.streetProps.filter((p) => p.kind === "cafe").length;
+  // 把車開到第一條隧道的北口外,直直開進去
+  const t = g.tunnelCenters[0];
+  g.player.x = t.x; g.player.z = t.z - 46; g.player.heading = 0; g.player.speed = 14;
+  let bumps = 0, inside = 0;
+  const off = g.onEvent; g.onEvent = (type) => { if (type === "bump") bumps++; };
+  for (let i = 0; i < 60 * 7; i++) {
+    g.input.throttle = 1; g.update(1 / 60);
+    if (Math.abs(g.player.z - t.z) < 30) inside++;
+  }
+  g.input.throttle = 0; g.onEvent = off;
+  const passedThrough = g.player.z > t.z + 30;
+  // 距離裁切:把玩家丟到城市另一角,遠處的街景該被關掉
+  g.player.x = 300; g.player.z = 300; g.update(1 / 60);
+  const visibleFar = g.streetGroups.filter((s) => s.g.visible).length;
+  const allBool = g.streetGroups.every((s) => typeof s.g.visible === "boolean");
+  return { stalls, cafes, bumps, inside, passedThrough, visibleFar, total: g.streetGroups.length, allBool };
+});
+ok(life.stalls >= 10, `街上有 ${life.stalls} 個路邊攤`);
+ok(life.cafes >= 8, `街上有 ${life.cafes} 組露天座`);
+ok(life.inside > 30, `車真的開進隧道裡(在隧道格內 ${life.inside} 幀)`);
+ok(life.bumps === 0, `穿隧道沒撞牆(撞了 ${life.bumps} 次)`);
+ok(life.passedThrough, "從北口進、南口出來了");
+ok(life.visibleFar < life.total, `遠處街景會被裁掉(可見 ${life.visibleFar}/${life.total})`);
+ok(life.allBool, "街景群組的 visible 全是嚴格 boolean");
+
 // ★ 第二期:下車走路(0908 使用者點名)
 const foot = await page.evaluate(async () => {
   const g = window.__city3d;
   const sleep = () => { for (let i = 0; i < 30; i++) g.update(1 / 60); };
+  // ★ 先把場面歸位:上一段隧道測試把車丟到城市另一角,那裡可能在建築裡 ⇒
+  //   下車的人會被 resolveBuilding 推走,量到的「人站在車旁多遠」就不是 dropSide 了。
+  //   (0,0) 是市中心大廣場,保證沒有建築。
+  g.player.x = 0; g.player.z = 0; g.player.heading = 0; g.player.speed = 0;
+  sleep();
   const objBefore = (() => { let n = 0; g.scene.traverse(() => n++); return n; })();
   const veh0 = g.settings.vehicle;
   // 下車

@@ -7,7 +7,7 @@
 //   ③ 隨時換載具 —— 停下來按一顆鈕就換(車 / 摩托車 / 馬 / 跑步 / 懸浮車)
 // ★ 沿用 racing3d 的鐵則:this.running 只給 RAF;mesh.visible 一律嚴格 boolean;鏡頭狀態建構子就有數字。
 import * as THREE from "three";
-import { CITY, SURFACES, worldSize, blockCenter, roadCenter, isPlaza, isPark, buildBuildings, buildPedestrians, stepPedestrians, surfaceAt, nearestRoadPoint, PED } from "./city.js";
+import { CITY, SURFACES, worldSize, blockCenter, roadCenter, isPlaza, isPark, isTunnel, buildBuildings, buildPedestrians, stepPedestrians, surfaceAt, nearestRoadPoint, buildStreetProps, PED } from "./city.js";
 import { CAR, DIFFICULTY, createCar, placeAt, stepCar, emptyInput, resolveCollisions, rpm01, kmh, clamp, wrapAngle, forwardOf, rightOf } from "./vehicle.js";
 import { VEHICLES, VEHICLE_IDS, vehicleParams } from "./vehicles.js";
 import { makeCarRig, makeMotoRig, makeHorseRig, makeHoverRig, makeRunnerRig } from "./rigs.js";
@@ -23,6 +23,13 @@ export const CAM_KEY = "city3d-camview";
    車停在原地等你回來,走遠了要自己走回去(小地圖會標停車點)。
    ★ 走路的快慢**不吃難度檔**:幼幼檔的孩子也是用同樣的速度走路,不然「下車」變成另一個難度旋鈕。 */
 export const WALK_CFG = { id: "walk", label: "走路", maxSpeed: 2.6, accel: 9, grip: 12, assist: 0, aiMax: 0, aiLatAcc: 0, aiSkill: 0, aiBoost: 0 };
+/* 👁 距離裁切:遠處的小東西不畫。
+   ★ 這裡省的是 **draw call**,不是物件數 —— 街邊攤與行人各自十幾個小 mesh,
+   放大到 9×9 之後全畫會掉到 38 fps;超過半徑就整個 Group visible=false,three 的
+   projectObject 直接跳過整支子樹。近處仍是全細節,所以看不出被裁過。
+   ★ 建築刻意**不裁**:遠處的樓是天際線,裁掉會看到城市憑空消失。 */
+export const CULL = { street: 150, ped: 190 };
+
 export const WALK = {
   reach: 4.5,        // 離停放的載具幾公尺內按得到「上車」
   dropSide: 1.9,     // 下車時人出現在載具左側幾公尺(不要生在車體裡)
@@ -72,6 +79,7 @@ export class CityGame {
     this.visited = new Set();       // 逛過哪些街廓
     this.pedBumps = 0;
 
+    this.streetGroups = [];         // 街邊擺設的群組(距離裁切用)
     this.onFoot = false;            // 現在是不是用兩條腿(下車走路)
     this.parked = null;             // 停在原地的載具 { vehicle, x, z, heading, rig }
     this.buildings = buildBuildings();
@@ -79,6 +87,7 @@ export class CityGame {
     // 驗收要用:廣場/公園的中心座標(使用者點名「能穿越廣場」,測試得知道廣場在哪)
     this.plazaCenters = CITY.plazas.map(([c, r]) => blockCenter(c, r));
     this.parkCenters = CITY.parks.map(([c, r]) => blockCenter(c, r));
+    this.tunnelCenters = CITY.tunnels.map(([c, r]) => blockCenter(c, r));
     this.player = null; this.rig = null;
 
     const saved = (key, fallback) => { try { const v = typeof localStorage !== "undefined" ? localStorage.getItem(key) : null; return v && CAM_VIEWS.includes(v) ? v : fallback; } catch { return fallback; } };
@@ -138,6 +147,12 @@ export class CityGame {
       for (let c = 0; c < CITY.cols; c++) {
         const p = blockCenter(c, r);
         const color = isPark(c, r) ? 0x63a856 : isPlaza(c, r) ? 0xd8cdb4 : 0x9aa0a8;
+        if (isTunnel(c, r)) {
+          // 通道那條帶鋪成柏油(跟 surfaceAt 說同一件事:那裡真的是馬路)
+          const lane = new THREE.Mesh(new THREE.PlaneGeometry(CITY.tunnelWidth, CITY.block), lambert(0x3f434b));
+          lane.rotation.x = -Math.PI / 2; lane.position.set(p.x, 0.02, p.z);
+          scene.add(lane);
+        }
         const m = new THREE.Mesh(blockGeo, lambert(color));
         m.rotation.x = -Math.PI / 2; m.position.set(p.x, 0.01, p.z);
         scene.add(m);
@@ -147,6 +162,8 @@ export class CityGame {
     }
     // 街道中央的白虛線(讓「這是馬路」看得出來)
     this._buildRoadMarks(scene);
+    this._buildTunnels(scene);
+    this._buildStreetLife(scene);
     this._buildBuildings(scene);
     this._buildPedMeshes(scene);
     this.scene = scene;
@@ -171,6 +188,189 @@ export class CityGame {
         const m = new THREE.Mesh(dash, mat);
         m.rotation.x = -Math.PI / 2; m.rotation.z = Math.PI / 2; m.position.set(x, 0.03, z);
         scene.add(m);
+      }
+    }
+  }
+
+  /** 🚇 隧道:兩道側牆(牆本身是建築、會擋路)+ 頂蓋 + 兩排燈條 + 兩端門框。 */
+  _buildTunnels(scene) {
+    const wallMat = lambert(0x8d8779), roofMat = lambert(0x6f6a5e), trimMat = lambert(0x3c3a34);
+    const lampMat = new THREE.MeshBasicMaterial({ color: 0xfff2c4 });
+    const halfW = CITY.tunnelWidth / 2, wt = CITY.tunnelWall, H = CITY.tunnelHeight;
+    for (const [c, r] of CITY.tunnels) {
+      const p = blockCenter(c, r);
+      const g = new THREE.Group(); g.position.set(p.x, 0, p.z); scene.add(g);
+      // 側牆(視覺;碰撞由 buildBuildings 的 tunnelWall 負責,兩者尺寸一致)
+      for (const sx of [-1, 1]) {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(wt, H + 1.4, CITY.block), wallMat);
+        wall.position.set(sx * (halfW + wt / 2), (H + 1.4) / 2, 0); g.add(wall);
+      }
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(CITY.tunnelWidth + wt * 2 + 0.4, 0.9, CITY.block), roofMat);
+      roof.position.y = H + 0.45; g.add(roof);
+      // 兩端門框(入口一眼看得出來)
+      for (const sz of [-1, 1]) {
+        const frame = new THREE.Mesh(new THREE.BoxGeometry(CITY.tunnelWidth + wt * 2 + 1.6, 1.5, 1.1), trimMat);
+        frame.position.set(0, H + 1.1, sz * (CITY.block / 2 - 0.4)); g.add(frame);
+      }
+      // 天花板燈條:每 8 公尺一盞,隧道裡才不會黑成一片
+      for (let z = -CITY.block / 2 + 5; z < CITY.block / 2; z += 8) {
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.14, 0.5), lampMat);
+        lamp.position.set(0, H - 0.15, z); g.add(lamp);
+      }
+    }
+  }
+
+  /** 🍢 街邊生活:路邊攤(推車+遮陽棚+老闆)與露天座(桌椅傘+坐著喝下午茶的人)。純景觀,不擋路。 */
+  _buildStreetLife(scene) {
+    this.streetProps = buildStreetProps();
+    // 幾何與材質共用一份:74 處 × 十幾個 mesh,不共用會白白吃記憶體
+    const geo = {
+      cartBody: new THREE.BoxGeometry(1.9, 0.85, 0.95),
+      cartTop: new THREE.BoxGeometry(2.05, 0.1, 1.1),
+      post: new THREE.BoxGeometry(0.08, 1.5, 0.08),
+      awning: new THREE.BoxGeometry(2.4, 0.1, 1.5),
+      wheel: new THREE.CylinderGeometry(0.22, 0.22, 0.1, 10),
+      sign: new THREE.BoxGeometry(1.55, 0.66, 0.06),
+      plate: new THREE.CylinderGeometry(0.14, 0.12, 0.03, 12),
+      steam: new THREE.SphereGeometry(0.09, 6, 5),
+      table: new THREE.CylinderGeometry(0.52, 0.52, 0.08, 14),
+      tableLeg: new THREE.CylinderGeometry(0.07, 0.09, 0.72, 8),
+      chairSeat: new THREE.BoxGeometry(0.42, 0.07, 0.42),
+      chairBack: new THREE.BoxGeometry(0.42, 0.42, 0.06),
+      chairLeg: new THREE.BoxGeometry(0.05, 0.42, 0.05),
+      umbPole: new THREE.CylinderGeometry(0.045, 0.045, 2.3, 8),
+      umbTop: new THREE.ConeGeometry(1.35, 0.45, 12),
+      cup: new THREE.CylinderGeometry(0.055, 0.045, 0.11, 8),
+      torso: new THREE.BoxGeometry(0.4, 0.5, 0.26),
+      thigh: new THREE.BoxGeometry(0.16, 0.2, 0.42),
+      shin: new THREE.BoxGeometry(0.15, 0.42, 0.16),
+      legStand: new THREE.BoxGeometry(0.16, 0.76, 0.18),
+      neck: new THREE.CylinderGeometry(0.072, 0.088, 0.15, 8),
+      skull: new THREE.SphereGeometry(0.18, 10, 8),
+      hairTop: new THREE.SphereGeometry(0.188, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+      hairNape: new THREE.SphereGeometry(0.188, 12, 8, Math.PI * 1.5 - 1.266, 2.532, Math.PI / 2 - 0.03, 0.58),
+      eye: new THREE.SphereGeometry(0.03, 6, 6),
+      arm: new THREE.CylinderGeometry(0.045, 0.045, 0.42, 8),
+    };
+    const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const mat = {
+      wood: lambert(0x8a5a34), metal: lambert(0xb9bec7), dark: lambert(0x33383f),
+      skin: lambert(0xf1c9a5), cup: lambert(0xffffff),
+      steam: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.32 }),
+      table: lambert(0xdcd3c2), chair: lambert(0x6b4a2b), umbrella: lambert(0xd9534f),
+    };
+    const SHIRTS = [0xe05c4a, 0x4a86e0, 0x4ac07a, 0xe0b44a, 0x9a6be0, 0xe07ac0];
+    const HAIR = [0x2b2118, 0x4a3527, 0x1d1a17, 0x6b4a2b, 0x3a2c22, 0x8a6a3f];
+    // 招牌:每種攤子畫一張(emoji + 品名),五張共用 ⇒ 一眼看得出這攤賣什麼
+    const signCache = new Map();
+    const signMaterial = (stallId, emoji, label, bg) => {
+      if (signCache.has(stallId)) return signCache.get(stallId);
+      const cv = document.createElement("canvas");
+      cv.width = 256; cv.height = 108;
+      const c = cv.getContext("2d");
+      c.fillStyle = "#" + bg.toString(16).padStart(6, "0");
+      c.fillRect(0, 0, cv.width, cv.height);
+      c.fillStyle = "rgba(255,255,255,0.92)";
+      c.fillRect(6, 6, cv.width - 12, cv.height - 12);
+      c.textAlign = "center"; c.textBaseline = "middle";
+      c.font = "54px system-ui, 'Segoe UI Emoji'";
+      c.fillText(emoji, 58, 56);
+      c.fillStyle = "#23262d";
+      c.font = "bold 44px system-ui, 'Microsoft JhengHei'";
+      c.fillText(label, 158, 58);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const m = new THREE.MeshBasicMaterial({ map: tex });
+      signCache.set(stallId, m);
+      return m;
+    };
+    const put3 = (parent, geometry, material, x, y, z) => {
+      const m = new THREE.Mesh(geometry, material);
+      m.position.set(x, y, z); parent.add(m); return m;
+    };
+
+    /**
+     * 一個人。pose="sit" 坐著(腿彎在桌下、手搭桌上、手邊一杯咖啡);pose="stand" 站著(腿直立)。
+     * ★ 站姿不能用「坐姿整個抬高」湊:那會做出**懸空盤腿**的老闆(0908 截圖實錘)。
+     */
+    const person = (parent, x, z, faceRot, idx, pose) => {
+      const p = new THREE.Group();
+      p.position.set(x, 0, z); p.rotation.y = faceRot; parent.add(p);
+      const shirt = lambert(SHIRTS[idx % SHIRTS.length]);
+      const hair = lambert(HAIR[(idx * 3 + 1) % HAIR.length]);
+      const stand = pose === "stand";
+      const yTorso = stand ? 1.02 : 0.72;
+      if (stand) {
+        put3(p, geo.legStand, mat.dark, -0.11, 0.38, 0);
+        put3(p, geo.legStand, mat.dark, 0.11, 0.38, 0);
+      } else {
+        put3(p, geo.thigh, mat.dark, -0.11, 0.5, 0.2);
+        put3(p, geo.thigh, mat.dark, 0.11, 0.5, 0.2);
+        put3(p, geo.shin, mat.dark, -0.11, 0.21, 0.38);
+        put3(p, geo.shin, mat.dark, 0.11, 0.21, 0.38);
+      }
+      put3(p, geo.torso, shirt, 0, yTorso, 0);
+      put3(p, geo.neck, mat.skin, 0, yTorso + 0.28, 0);
+      put3(p, geo.skull, mat.skin, 0, yTorso + 0.44, 0);
+      put3(p, geo.hairTop, hair, 0, yTorso + 0.46, -0.008);
+      put3(p, geo.hairNape, hair, 0, yTorso + 0.46, -0.008);
+      put3(p, geo.eye, white, -0.06, yTorso + 0.47, 0.155);
+      put3(p, geo.eye, white, 0.06, yTorso + 0.47, 0.155);
+      if (stand) {
+        // 站著的老闆:雙手垂在身側微微向前(像在招呼客人)
+        const aL = put3(p, geo.arm, shirt, -0.245, yTorso + 0.02, 0.04); aL.rotation.x = 0.22;
+        const aR = put3(p, geo.arm, shirt, 0.245, yTorso + 0.02, 0.04); aR.rotation.x = 0.22;
+      } else {
+        // 坐著:手肘往前搭在桌沿,手邊一杯咖啡
+        const aL = put3(p, geo.arm, shirt, -0.235, 0.84, 0.12); aL.rotation.x = 0.78;
+        const aR = put3(p, geo.arm, shirt, 0.235, 0.84, 0.12); aR.rotation.x = 0.78;
+        put3(p, geo.cup, mat.cup, 0.2, 0.81, 0.34);
+      }
+      return p;
+    };
+
+    this.streetGroups = [];
+    for (let i = 0; i < this.streetProps.length; i++) {
+      const s = this.streetProps[i];
+      const g = new THREE.Group();
+      g.position.set(s.x, 0, s.z); g.rotation.y = s.rot;
+      scene.add(g);
+      this.streetGroups.push({ g, x: s.x, z: s.z });
+      if (s.kind === "stall") {
+        put3(g, geo.cartBody, mat.wood, 0, 0.62, 0);
+        put3(g, geo.cartTop, mat.metal, 0, 1.09, 0);
+        put3(g, geo.wheel, mat.dark, -0.8, 0.22, 0.42).rotation.z = Math.PI / 2;
+        put3(g, geo.wheel, mat.dark, 0.8, 0.22, 0.42).rotation.z = Math.PI / 2;
+        for (const sx of [-1, 1]) put3(g, geo.post, mat.metal, sx * 1.0, 1.85, -0.1);
+        put3(g, geo.awning, lambert(s.awning), 0, 2.6, -0.1);
+        put3(g, geo.sign, signMaterial(s.stall, s.emoji, s.label, s.awning), 0, 2.18, 0.62);   // 招牌掛在棚沿下,面向客人
+        // 熱氣從攤面往上飄(小吃嘛):三顆小球斜著上升,不要擋住老闆的臉
+        for (let k = 0; k < 3; k++) put3(g, geo.steam, mat.steam, 0.42 + k * 0.1, 1.25 + k * 0.24, 0.1);
+        // 老闆站在攤子後面、**面向客人**(局部 +z 就是街道那一側;給 Math.PI 會讓他背對客人)
+        person(g, 0, -0.95, 0, i, "stand");
+      } else {
+        put3(g, geo.table, mat.table, 0, 0.76, 0);
+        put3(g, geo.tableLeg, mat.metal, 0, 0.36, 0);
+        // 桌上的下午茶:一個盤子 + 兩杯(空桌面看起來像還沒開店)
+        put3(g, geo.plate, mat.cup, -0.14, 0.815, 0.1);
+        put3(g, geo.cup, mat.cup, 0.16, 0.855, -0.05);
+        put3(g, geo.cup, mat.cup, 0.02, 0.855, 0.24);
+        if (s.umbrella) {
+          put3(g, geo.umbPole, mat.metal, 0, 1.15, 0);
+          put3(g, geo.umbTop, mat.umbrella, 0, 2.42, 0);
+        }
+        for (let k = 0; k < s.seats; k++) {
+          const a = (k / s.seats) * Math.PI * 2 + 0.4;
+          const cx = Math.sin(a) * 0.95, cz = Math.cos(a) * 0.95;
+          const chair = new THREE.Group();
+          chair.position.set(cx, 0, cz); chair.rotation.y = a + Math.PI; g.add(chair);
+          put3(chair, geo.chairSeat, mat.chair, 0, 0.45, 0);
+          put3(chair, geo.chairBack, mat.chair, 0, 0.68, -0.18);
+          for (const leg of [[-0.17, -0.17], [0.17, -0.17], [-0.17, 0.17], [0.17, 0.17]]) {
+            put3(chair, geo.chairLeg, mat.chair, leg[0], 0.23, leg[1]);
+          }
+          if (k / s.seats < s.taken) person(g, cx * 0.86, cz * 0.86, a + Math.PI, i * 7 + k, "sit");
+        }
       }
     }
   }
@@ -476,10 +676,17 @@ export class CityGame {
   /** 展示/驗收用的自動駕駛:沿路蛇行,快到城界就轉回市中心(不然四秒就開出城,量到的都是邊緣)。 */
   _autopilotInput(car) {
     const { w, h } = worldSize();
-    let steer = Math.sin(this.time * 0.6) * 0.35;
+    // ★ 要**沿著馬路**走,不能隨機蛇行:街廓裡滿是樓,蛇行四秒必撞進去卡死
+    //   (0908 地圖放大 + 建築改象限配置之後實測到的:車 4 秒後 speed 0.14、stuckT 1.03)。
+    //   做法:取正前方 25m 那一點最近的馬路中心當目標,轉向它 ⇒ 到路口會自然順著轉。
+    const f = forwardOf(car.heading);
+    const t = nearestRoadPoint(car.x + f.x * 25, car.z + f.z * 25);
+    let want = Math.atan2(t.x - car.x, t.z - car.z);
     if (Math.max(Math.abs(car.x) / (w / 2), Math.abs(car.z) / (h / 2)) > 0.62) {
-      steer = clamp(wrapAngle(Math.atan2(-car.x, -car.z) - car.heading) * 1.4, -1, 1);   // 朝市中心
+      want = Math.atan2(-car.x, -car.z);            // 快到城界就掉頭回市中心
     }
+    let steer = clamp(wrapAngle(want - car.heading) * 1.6, -1, 1);
+    if (car.bumpT > 0) steer = clamp(steer + 0.8 * Math.sign(steer || 1), -1, 1);   // 剛撞到就轉得更用力
     return { ...emptyInput(), throttle: 1, steer };
   }
 
@@ -530,9 +737,16 @@ export class CityGame {
   }
 
   _syncPeds(dt) {
+    const px = this.player ? this.player.x : 0, pz = this.player ? this.player.z : 0;
+    const pedR2 = CULL.ped * CULL.ped, stR2 = CULL.street * CULL.street;
+    for (const s of this.streetGroups) {
+      s.g.visible = !!(((s.x - px) ** 2 + (s.z - pz) ** 2) < stR2);
+    }
     for (let i = 0; i < this.peds.length; i++) {
       const p = this.peds[i], m = this.pedMeshes[i];
       if (!m) continue;
+      m.g.visible = !!(((p.x - px) ** 2 + (p.z - pz) ** 2) < pedR2);
+      if (!m.g.visible) continue;
       m.g.position.set(p.x, 0, p.z);
       m.g.rotation.y = p.dir;
       // 走路上下擺(逃跑時快一點);撞到只是往旁邊跳,不倒地

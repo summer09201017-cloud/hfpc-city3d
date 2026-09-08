@@ -15,6 +15,12 @@ export const CITY = {
   // 廣場與公園要**散開**:擠在一起等於只有一個大空地,而且遠端整片都是同樣的樓會迷路
   plazas: [[4, 4], [1, 2], [7, 1], [2, 7], [6, 6]],   // 整格鋪面、沒有建築(中央那格是市中心大廣場)
   parks: [[1, 6], [6, 2], [3, 1], [8, 5], [4, 8]],    // 草地 + 樹,開得進去但很慢
+  // 🚇 這幾格街廓中間有一條**南北向的穿堂隧道**:車可以直接從北邊那條街開進去、南邊那條街出來。
+  //    兩側是牆(唯一會擋路的東西),頂上有蓋,裡面有燈。
+  tunnels: [[3, 4], [6, 3], [2, 6]],
+  tunnelWidth: 13,     // 通道淨寬(兩台車錯得開)
+  tunnelWall: 3,       // 側牆厚度
+  tunnelHeight: 6.2,   // 淨高
 };
 
 /* 地面材質:速度倍率 + 額外減速(車體層直接吃這兩個值)。
@@ -55,6 +61,7 @@ export function outsideDepth(x, z) {
 const inList = (list, c, r) => list.some(([a, b]) => a === c && b === r);
 export const isPlaza = (c, r) => inList(CITY.plazas, c, r);
 export const isPark = (c, r) => inList(CITY.parks, c, r);
+export const isTunnel = (c, r) => inList(CITY.tunnels, c, r);
 
 /** 世界座標 → 落在哪一格街廓(可能超出邊界,回傳 null)。 */
 export function blockAt(x, z) {
@@ -80,6 +87,8 @@ export function surfaceAt(x, z) {
   if (onRoadX || onRoadZ) return SURFACES.road;
   if (isPlaza(b.c, b.r)) return SURFACES.plaza;
   if (isPark(b.c, b.r)) return SURFACES.grass;
+  // 隧道格:格內正中央那條南北向通道是馬路(車真的開得過去),兩側仍是人行道
+  if (isTunnel(b.c, b.r) && Math.abs(lx - CITY.block / 2) <= CITY.tunnelWidth / 2) return SURFACES.road;
   // 一般街廓:外圈是人行道,內部是建築基地(建築本身另外做碰撞,基地地面仍是人行道)
   // 外圈人行道、內部建築基地,地面都算人行道(建築本身另外做碰撞)
   return SURFACES.walk;
@@ -105,6 +114,17 @@ export function buildBuildings(seed = 20260907) {
     for (let c = 0; c < CITY.cols; c++) {
       if (isPlaza(c, r) || isPark(c, r)) continue;
       const center = blockCenter(c, r);
+      if (isTunnel(c, r)) {
+        // 隧道格:不放樓,改放兩道貫穿整格的側牆(牆是建築 ⇒ 會擋路;頂蓋只是景,不擋)
+        const off = CITY.tunnelWidth / 2 + CITY.tunnelWall / 2;
+        for (const sx of [-1, 1]) {
+          out.push({
+            x: center.x + sx * off, z: center.z, w: CITY.tunnelWall / 2, d: CITY.block / 2,
+            h: CITY.tunnelHeight + 1.4, c, r, kind: "tunnelWall", tint: rnd(),
+          });
+        }
+        continue;
+      }
       // ★ 象限配置:把 50×50 的建築基地切成 2×2 四個象限,每棟挑一個**沒被用過的**象限。
       //   這樣天生不重疊,不必再做碰撞重試——上一版用「隨機擺 + gap 檢查、最多試 8 次」,
       //   但 ox 只能晃 ±5m 而兩棟半寬加起來就要 29m ⇒ 第二棟幾乎永遠試不進去,
@@ -163,6 +183,60 @@ export function resolveBuilding(buildings, x, z, radius = 1.1) {
   return { hit: true, nx, nz, speedMul: 0.45, axis };
 }
 
+/* ── 🍢 街邊生活(0908 使用者:「人行道上有路邊攤販叫賣小吃、有路邊餐桌椅,有人坐著喝咖啡吃下午茶」)
+   攤子與桌椅擺在**人行道**上,純景觀:不擋路、不判定 —— 車照樣開得過去(這座城的規則沒變)。
+   位置決定性生成,每次開都一樣,孩子記得住「那攤蚵仔煎在哪」。 */
+export const STREET_LIFE = {
+  // ★ 密度是效能與熱鬧的取捨:每邊都擺(0.55+0.45=必定有)會做出 272 處、上千個 mesh,
+  //   場景物件從 4900 衝到 6500 會掉幀。0.16+0.12 ⇒ 每格約 1.1 處、全城約 80 處,
+  //   「走幾步就看到一攤」已經夠熱鬧。
+  stallChance: 0.16,     // 一般街廓的每一邊有攤子的機率
+  cafeChance: 0.12,      // 那一邊改成露天座的機率
+  inset: 1.9,            // 離人行道外緣多遠(太貼會卡在馬路邊)
+  cafeSeats: 3,          // 一組露天座幾張椅子
+};
+export const STALL_KINDS = [
+  { id: "noodle", label: "麵攤", emoji: "🍜", awning: 0xe0563f },
+  { id: "grill", label: "烤肉串", emoji: "🍢", awning: 0xd8a33a },
+  { id: "bao", label: "包子饅頭", emoji: "🥟", awning: 0xf0f0ea },
+  { id: "drink", label: "手搖飲", emoji: "🧋", awning: 0x59b3a0 },
+  { id: "fruit", label: "水果攤", emoji: "🍉", awning: 0x6fbf4a },
+];
+
+/**
+ * 街邊擺設:回傳 [{ kind:"stall"|"cafe", x, z, rot, ... }]。
+ * ★ 一律擺在人行道那一圈(街廓外緣往內縮 inset),不會落到車道上——city.test 逐點驗。
+ */
+export function buildStreetProps(seed = 4242) {
+  const rnd = mulberry32(seed);
+  const out = [];
+  const ring = CITY.block / 2 - CITY.walk / 2;      // 人行道中線離街廓中心多遠
+  for (let r = 0; r < CITY.rows; r++) {
+    for (let c = 0; c < CITY.cols; c++) {
+      if (isPlaza(c, r) || isPark(c, r) || isTunnel(c, r)) continue;   // 廣場/公園/隧道自己有景
+      const center = blockCenter(c, r);
+      // 四個邊各自決定要不要擺;side: 0=北 1=東 2=南 3=西
+      for (let side = 0; side < 4; side++) {
+        const roll = rnd();
+        const along = (rnd() - 0.5) * (CITY.block - CITY.walk * 2 - 8);   // 沿著那一邊的位置
+        const d = ring - STREET_LIFE.inset;
+        let x = center.x, z = center.z, rot = 0;
+        if (side === 0) { x += along; z -= d; rot = Math.PI; }
+        else if (side === 1) { x += d; z += along; rot = -Math.PI / 2; }
+        else if (side === 2) { x += along; z += d; rot = 0; }
+        else { x -= d; z += along; rot = Math.PI / 2; }
+        if (roll < STREET_LIFE.stallChance) {
+          const k = STALL_KINDS[Math.floor(rnd() * STALL_KINDS.length)];
+          out.push({ kind: "stall", stall: k.id, label: k.label, emoji: k.emoji, awning: k.awning, x, z, rot, c, r });
+        } else if (roll < STREET_LIFE.stallChance + STREET_LIFE.cafeChance) {
+          out.push({ kind: "cafe", x, z, rot, seats: STREET_LIFE.cafeSeats, umbrella: rnd() < 0.75, c, r, taken: rnd() });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 /* ── 行人(撞不傷)────────────────────────────
    在人行道與廣場上走;車靠近會**先閃開**,真的碰到也只是被推開 + 車減速。
    不倒地、不流血、不消失 —— 這是給孩子玩的都市。 */
@@ -181,7 +255,12 @@ export function buildPedestrians(seed = 77) {
   const rnd = mulberry32(seed);
   const out = [];
   for (let i = 0; i < PED.count; i++) {
-    const c = Math.floor(rnd() * CITY.cols), r = Math.floor(rnd() * CITY.rows);
+    // ★ 隧道格要跳過:行人的生成圈是繞著街廓走的,會穿過通道 ⇒ 有人生在車道正中央
+    let c = 0, r = 0;
+    for (let t = 0; t < 24; t++) {
+      c = Math.floor(rnd() * CITY.cols); r = Math.floor(rnd() * CITY.rows);
+      if (!isTunnel(c, r)) break;
+    }
     const center = blockCenter(c, r);
     const ring = CITY.block / 2 - CITY.walk / 2;
     const a = rnd() * Math.PI * 2;

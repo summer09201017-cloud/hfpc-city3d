@@ -7,7 +7,7 @@ import {
   CITY, SURFACES, PED,
   worldSize, blockCenter, blockAt, isPlaza, isPark, surfaceAt,
   buildBuildings, buildingAt, resolveBuilding,
-  buildPedestrians, stepPedestrians, nearestRoadPoint, roadCenter,
+  buildPedestrians, stepPedestrians, nearestRoadPoint, roadCenter, isTunnel, buildStreetProps, STALL_KINDS,
 } from "../src/city.js";
 
 let pass = 0;
@@ -66,7 +66,8 @@ test("blockCenter 真的在街廓正中央、roadCenter 真的在馬路上(不�
     for (let r = 0; r < CITY.rows; r++) {
       const b = blockCenter(c, r);
       assert.deepEqual(blockAt(b.x, b.z), { c, r }, `blockCenter(${c},${r}) 落到別格去了`);
-      assert.notEqual(surfaceAt(b.x, b.z).id, "road", `blockCenter(${c},${r}) 掉在馬路上`);
+      // 隧道格例外:它的正中央**就是**穿堂通道,是馬路才對
+      if (!isTunnel(c, r)) assert.notEqual(surfaceAt(b.x, b.z).id, "road", `blockCenter(${c},${r}) 掉在馬路上`);
       const rc = roadCenter(c, r);
       assert.equal(surfaceAt(rc.x, rc.z).id, "road", `roadCenter(${c},${r}) 不在馬路上`);
     }
@@ -77,6 +78,36 @@ test("行人生成圈整圈都在人行道上(不是生在馬路中間)", () => 
   for (const p of buildPedestrians()) {
     const s = surfaceAt(p.x, p.z);
     assert.notEqual(s.id, "road", `行人 ${p.id} 生在馬路上 @(${p.x.toFixed(1)},${p.z.toFixed(1)})`);
+  }
+});
+
+test("★ 隧道:格中央是可以開的通道、兩側是人行道、牆不擋在通道裡", () => {
+  assert.ok(CITY.tunnels.length >= 1, "一條隧道都沒有");
+  const bs = buildBuildings();
+  for (const [c, r] of CITY.tunnels) {
+    const p = blockCenter(c, r);
+    assert.equal(surfaceAt(p.x, p.z).id, "road", `隧道 (${c},${r}) 的通道中央不是馬路`);
+    // 通道邊緣內側仍是馬路、外側是人行道
+    const half = CITY.tunnelWidth / 2;
+    assert.equal(surfaceAt(p.x + half - 0.5, p.z).id, "road", "通道邊緣內側應該還是馬路");
+    assert.equal(surfaceAt(p.x + half + CITY.tunnelWall + 2, p.z).id, "walk", "通道外側應該是人行道");
+    // 這一格只有兩道牆,而且牆不可以侵入通道
+    const walls = bs.filter((b) => b.c === c && b.r === r);
+    assert.equal(walls.length, 2, `隧道格 (${c},${r}) 應該剛好兩道牆,不是 ${walls.length}`);
+    for (const w of walls) {
+      assert.equal(w.kind, "tunnelWall");
+      assert.ok(Math.abs(w.x - p.x) - w.w >= half - 0.01, `牆侵入通道了(牆內側 ${(Math.abs(w.x - p.x) - w.w).toFixed(2)} < 半寬 ${half})`);
+    }
+  }
+});
+
+test("★ 隧道貫穿整格:沿通道南北向掃一整條,每一點都是馬路", () => {
+  for (const [c, r] of CITY.tunnels) {
+    const p = blockCenter(c, r);
+    for (let i = 0; i <= 60; i++) {
+      const z = p.z - CITY.block / 2 + (CITY.block * i) / 60;
+      assert.equal(surfaceAt(p.x, z).id, "road", `隧道 (${c},${r}) 在 z 偏移 ${(z - p.z).toFixed(1)} 斷掉了`);
+    }
   }
 });
 
@@ -107,6 +138,9 @@ test("廣場與公園裡沒有建築(才穿得過去)", () => {
 
 test("建築不會蓋到馬路上(不然路會被堵死)", () => {
   for (const b of buildBuildings()) {
+    // 隧道側牆是例外:它的內側**本來就**貼著通道邊界(通道是馬路),
+    // 「不侵入通道」由上面那條隧道測試用嚴格不等式驗
+    if (b.kind === "tunnelWall") continue;
     for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
       const s = surfaceAt(b.x + dx * b.w, b.z + dz * b.d);
       assert.notEqual(s.id, "road", `建築角落壓到馬路 @(${b.x},${b.z})`);
@@ -190,7 +224,45 @@ test("行人不會被趕到天邊(離自己的街廓有繩長)", () => {
   }
 });
 
-/* ④ 救援落點 */
+/* ④ 街邊生活 */
+test("★ 路邊攤與露天座**全部**擺在人行道上(一個都不可以擺到車道)", () => {
+  const ps = buildStreetProps();
+  assert.ok(ps.length >= 30, `街邊擺設只有 ${ps.length} 處,太冷清`);
+  for (const p of ps) {
+    const su = surfaceAt(p.x, p.z);
+    assert.equal(su.id, "walk", `${p.kind} 擺到 ${su.label} 上了 @(${p.x.toFixed(1)},${p.z.toFixed(1)})`);
+  }
+});
+
+test("街邊擺設是決定性的、而且不會擺進廣場/公園/隧道", () => {
+  const a = buildStreetProps(), b = buildStreetProps();
+  assert.deepEqual(a.map((p) => [p.kind, p.x, p.z]), b.map((p) => [p.kind, p.x, p.z]));
+  for (const p of a) {
+    assert.ok(!isPlaza(p.c, p.r) && !isPark(p.c, p.r) && !isTunnel(p.c, p.r), `擺進了特殊街廓 (${p.c},${p.r})`);
+  }
+});
+
+test("每個攤子都有招牌要用的品名與 emoji(缺了畫面會印 undefined)", () => {
+  const ids = new Set(STALL_KINDS.map((k) => k.id));
+  for (const p of buildStreetProps()) {
+    if (p.kind !== "stall") continue;
+    assert.ok(ids.has(p.stall), `不認得的攤種 ${p.stall}`);
+    assert.ok(typeof p.label === "string" && p.label.length > 0, "攤子沒有中文品名");
+    assert.ok(typeof p.emoji === "string" && p.emoji.length > 0, "攤子沒有 emoji");
+    assert.ok(Number.isFinite(p.awning), "攤子沒有棚色");
+  }
+});
+
+test("露天座的座位數與入座比例都是合法數字", () => {
+  for (const p of buildStreetProps()) {
+    if (p.kind !== "cafe") continue;
+    assert.ok(Number.isInteger(p.seats) && p.seats >= 2, `座位數怪怪的:${p.seats}`);
+    assert.ok(p.taken >= 0 && p.taken <= 1, `入座比例超出 0~1:${p.taken}`);
+    assert.equal(typeof p.umbrella, "boolean", "有沒有傘要是 boolean");
+  }
+});
+
+/* ⑤ 救援落點 */
 test("卡住救援一定放回馬路上", () => {
   const { w, h } = worldSize();
   for (let i = 0; i < 60; i++) {
