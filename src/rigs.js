@@ -13,36 +13,121 @@ const box = (w, h, d, mat) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat
 const put = (mesh, x, y, z, parent) => { mesh.position.set(x, y, z); parent.add(mesh); return mesh; };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
-/** 騎士頭(臉部鐵則):膚色球 + 帽殼 + 眼白/瞳孔 + 微笑 + 露出的耳。原點=脖子。 */
-/** hatMat=帽色;opts.helmet=false ⇒ 改成頭髮(跑步/走路的人不戴安全帽),形狀一樣只是換色、不畫帽箍。 */
-function makeRiderHead(hatMat, skin, { helmet = true, hairColor = 0x2b2118 } = {}) {
+/**
+ * 🧑‍🦱 頭髮(共用:騎士 / 路人 / 街邊人物都用這一支)。回傳 Group,原點 = 頭球中心。
+ *
+ * ★ 這一套是 0908 使用者實玩兩輪回饋長出來的,三條都不能省:
+ *   ① **主髮體不可以蓋到赤道**。蓋到赤道(θ=π/2)的半球,下緣是一整圈**水平線**,
+ *      從任何角度看都是那條線 —— 那就是「妹妹頭」的本體。收到 θ≈1.42(耳朵上方)就結束,
+ *      後腦與瀏海各自往下補,側面輪廓才會變成「前眉毛、側耳上、後後頸」的斜線。
+ *   ② **後腦不可以是一片等半徑球面**。單一半徑 + 單一顏色 = 一塊塑膠板(使用者原話:「太平整」)。
+ *      拆成三束,半徑、長度、明度都差一點,邊界自然出現階梯,側面看才有髮束厚度。
+ *   ③ **髮色不要用接近黑的顏色**。0x2b2118 那種深度下,再多層次也看不出來。
+ * ★ 不做的事:鬢角 —— 往下延伸的側髮一定會蓋到耳朵,而「眼耳嘴眉齊」是人物鐵則。
+ *
+ * @param {number} hairColor 髮色(建議 0x3a2b1c ~ 0x8a6a3f,別用接近黑的)
+ * @param {{r?:number, detail?:"full"|"low"}} opts r=髮球半徑(約頭球 ×1.16);
+ *        "low" 只做 3 片給路人(輪廓一樣、省 draw call),"full" 做 7 片
+ */
+export function makeHair(hairColor, { r = 0.2, detail = "full" } = {}) {
   const g = new THREE.Group();
-  // 脖子(0908 使用者實玩:「摩托車的人頭怎會長在背上,也沒有脖子,騎馬的人也沒有脖子」)。
+  const FRONT = Math.PI / 2, BACK = Math.PI * 1.5;
+  const piece = (geo, color, dy, dz, sx, sy, sz) => {
+    const m = new THREE.Mesh(geo, lambert(color));
+    m.position.set(0, dy || 0, dz || 0);
+    m.scale.set(sx || 1.02, sy || 0.94, sz || 1.06);
+    g.add(m);
+    return m;
+  };
+  // ① 主髮體:收在耳朵上方(θ 1.42),**不要**蓋到赤道
+  piece(new THREE.SphereGeometry(r, 14, 10, 0, Math.PI * 2, 0, 1.42), hairColor);
+  // ② 後腦中央束:最長、最亮
+  const nape = piece(new THREE.SphereGeometry(r * 1.035, 12, 7, BACK - 0.46, 0.92, 1.34, 0.60), shadeHex(hairColor, 16), 0, -0.006, 1.0, 0.97, 1.08);
+  nape.userData.napeGuard = true;
+  // ③ 瀏海:斜的(對稱的直瀏海正是妹妹頭),下緣停在眉毛、不壓眼睛
+  const bangs = piece(new THREE.SphereGeometry(r * 1.012, 14, 7, FRONT - 1.06, 2.12, 1.30, 0.32), hairColor, -0.004, 0.004, 1.02, 1.0, 1.04);
+  bangs.rotation.x = -0.05;
+  bangs.rotation.z = 0.13;
+  if (detail !== "full") return g;
+  // ④ 後腦左右束:短一點、暗一點 ⇒ 邊界有階梯
+  for (const phi of [BACK - 1.30, BACK + 0.44]) {
+    piece(new THREE.SphereGeometry(r * 1.005, 12, 6, phi, 0.86, 1.38, 0.48), shadeHex(hairColor, -14), 0, -0.002, 1.01, 0.96, 1.05);
+  }
+  // ⑤ 後頸髮尖:窄、略往後翹
+  const tail = piece(new THREE.SphereGeometry(r * 0.975, 12, 6, BACK - 0.52, 1.04, 1.80, 0.25), hairColor, -0.008, -0.004, 0.99, 1, 1.10);
+  tail.userData.napeGuard = true;
+  // ⑥ 側髮:把「瀏海比主髮體低」的直角缺口填成斜坡;下緣停在耳朵上方
+  for (const phi of [0.30, Math.PI - 0.82]) {
+    piece(new THREE.SphereGeometry(r * 1.008, 12, 6, phi, 0.52, 1.42, 0.16), shadeHex(hairColor, -8), -0.002, 0, 1.02, 0.95, 1.05);
+  }
+  // ⑦ 分線高光:死色的球面最顯廉價
+  piece(new THREE.SphereGeometry(r * 1.005, 12, 8, FRONT - 1.34, 1.12, 0.08, 0.66), shadeHex(hairColor, 34), 0.002, 0, 1.02, 1, 1.05);
+  return g;
+}
+
+/** 把顏色提亮/壓暗 amt(可負)。髮束之間的明度差就是靠這個。 */
+export function shadeHex(hex, amt) {
+  const ch = (v) => Math.max(0, Math.min(255, v + amt));
+  return (ch((hex >> 16) & 255) << 16) | (ch((hex >> 8) & 255) << 8) | ch(hex & 255);
+}
+
+/**
+ * 🪖 安全帽(共用)。回傳 Group,原點 = 頭球中心。
+ * ★ 帽子跟頭髮相反:**光滑是對的**,但一定要有帽箍 + 通風脊 + 帽舌,
+ *   不然就只是一個倒扣的碗。後腦護片只包正後方 ±72°,兩側留空才**不蓋耳朵**。
+ */
+export function makeHelmet(shellColor, { r = 0.2 } = {}) {
+  const g = new THREE.Group();
+  const BACK = Math.PI * 1.5;
+  const mat = lambert(shellColor), trim = lambert(0x2a2f3a);
+  const piece = (geo, m, dy, dz) => {
+    const mesh = new THREE.Mesh(geo, m || mat);
+    mesh.position.set(0, dy || 0, dz || 0);
+    mesh.scale.set(1.02, 1, 1.05);
+    g.add(mesh);
+    return mesh;
+  };
+  piece(new THREE.SphereGeometry(r, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2));
+  const nape = piece(new THREE.SphereGeometry(r, 16, 8, BACK - 1.266, 2.532, Math.PI / 2 - 0.03, 0.56));
+  nape.userData.napeGuard = true;
+  const brim = new THREE.Mesh(new THREE.TorusGeometry(r * 1.015, 0.015, 6, 22), trim);
+  brim.rotation.x = Math.PI / 2; brim.scale.set(1.02, 1.05, 1); g.add(brim);
+  for (const sx of [-1, 1]) {   // 通風脊:安全帽 vs 碗 最省事的分辨點
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.024, 0.30), trim);
+    rib.position.set(sx * 0.045, r * 0.925, 0.01); rib.rotation.x = 0.06; g.add(rib);
+  }
+  const peak = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.024, 0.085), mat);   // 帽舌
+  peak.position.set(0, 0.012, r * 0.98); peak.rotation.x = 0.24; g.add(peak);
+  return g;
+}
+
+/**
+ * 騎士頭(臉部鐵則):脖子 + 膚色頭球 + 安全帽或頭髮 + 眼白/瞳孔 + 微笑 + 露出的耳。
+ * 原點 = 脖子底(往下多伸一截埋進軀幹,呼叫端把 position 對準**軀幹上緣**即可)。
+ * @param {number} hatMat 安全帽顏色(通常用車色)
+ * @param {*} skin 膚色材質
+ * @param {{helmet?:boolean, hairColor?:number}} opts helmet=false ⇒ 戴頭髮(跑步/走路的人不戴安全帽)
+ */
+function makeRiderHead(hatMat, skin, { helmet = true, hairColor = 0x43301f } = {}) {
+  const g = new THREE.Group();
+  // 脖子(0908 使用者實玩:「摩托車的人頭怎會長在背上,也沒有脖子」)。
   // ★ 圓柱往下多伸一截、埋進軀幹裡 ⇒ 各 rig 只要把 head.position 對準軀幹上緣就接得起來,不會露斷面。
+  // ★★ 加了脖子還要**看得到**:第一版整截被頭球包住,四種人形的 head.position 各抬高 3~5cm 才露得出來。
   const neck = put(new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.098, 0.18, 10), skin), 0, -0.04, 0, g);
   neck.userData.neck = true;
   put(new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 10), skin), 0, 0.17, 0, g);
-  // 🪖 安全帽(0908 使用者實玩:「騎馬與騎車的人,後面沒有頭髮」——原本只有頂上 89° 的瓜皮帽,
-  //    後腦與後頸整片裸著膚色球。改成帽殼 + 後腦護片 + 帽箍 + 下巴帶,騎車戴安全帽也是好示範)。
-  const capMat = helmet ? hatMat : lambert(hairColor);
-  const hat = put(new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), capMat), 0, 0.2, -0.01, g);
-  hat.scale.set(1.02, 1, 1.05);
-  // 後腦護片:只包正後方 ±60°(3π/2 為正後方),兩側留空 ⇒ **不蓋耳朵**(人物鐵則:眼耳嘴眉齊)
-  const nape = put(new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 8, Math.PI * 1.5 - 1.266, 2.532, Math.PI / 2 - 0.03, 0.56), capMat), 0, 0.2, -0.01, g);
-  nape.scale.set(1.02, 1, 1.05);
-  nape.userData.napeGuard = true;      // 驗收用:確認後腦真的有東西遮
-  // 帽箍(深色一圈,輪廓才看得出是安全帽不是頭髮);頭髮版不畫
-  if (helmet) {
-    const brim = put(new THREE.Mesh(new THREE.TorusGeometry(0.203, 0.015, 6, 22), lambert(0x2a2f3a)), 0, 0.2, -0.01, g);
-    brim.rotation.x = Math.PI / 2; brim.scale.set(1.02, 1.05, 1);
-  }
-  // 下巴帶(兩側各一條,往內斜)
-  // ※ 下巴帶試過就拿掉了:這種多邊形量體下,再細的帶子從側面看都是「貼在臉頰上的一根黑棒子」,
-  //   而帽殼 + 後腦護片 + 黑帽箍已經足夠讓人一眼看出是安全帽。
+
+  const top = helmet
+    ? makeHelmet(typeof hatMat === "number" ? hatMat : 0x1e88e5)
+    : makeHair(hairColor, { r: 0.2, detail: "full" });
+  top.position.set(0, 0.2, -0.01);
+  g.add(top);
+
   for (const sx of [-1, 1]) {
     put(new THREE.Mesh(new THREE.SphereGeometry(0.036, 8, 6), lambert(0xffffff)), sx * 0.06, 0.18, 0.15, g);
     put(new THREE.Mesh(new THREE.SphereGeometry(0.018, 6, 6), lambert(0x111111)), sx * 0.06, 0.18, 0.182, g);
-    const ear = put(new THREE.Mesh(new THREE.SphereGeometry(0.032, 6, 6), skin), sx * 0.166, 0.172, -0.015, g);   // 耳朵(帽子不蓋耳;要在頭中心偏後、與眼同高,擺太前側面看像鼻子)
+    // 耳朵:要在頭中心偏後、與眼同高(擺太前側面看像鼻子);帽子與頭髮都**不准蓋到它**
+    const ear = put(new THREE.Mesh(new THREE.SphereGeometry(0.032, 6, 6), skin), sx * 0.166, 0.172, -0.015, g);
     ear.scale.set(0.62, 1.15, 1);
   }
   const smile = put(new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 6, 10, Math.PI), lambert(0x7a3b2e)), 0, 0.11, 0.165, g);

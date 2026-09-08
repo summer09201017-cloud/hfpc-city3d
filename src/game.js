@@ -10,7 +10,7 @@ import * as THREE from "three";
 import { CITY, SURFACES, worldSize, blockCenter, roadCenter, isPlaza, isPark, isTunnel, buildBuildings, buildPedestrians, stepPedestrians, surfaceAt, nearestRoadPoint, buildStreetProps, dailyRoute, todayKey, ARRIVE_R, PED } from "./city.js";
 import { CAR, DIFFICULTY, createCar, placeAt, stepCar, emptyInput, resolveCollisions, rpm01, kmh, clamp, wrapAngle, forwardOf, rightOf } from "./vehicle.js";
 import { VEHICLES, VEHICLE_IDS, vehicleParams } from "./vehicles.js";
-import { makeCarRig, makeMotoRig, makeHorseRig, makeHoverRig, makeRunnerRig } from "./rigs.js";
+import { makeCarRig, makeMotoRig, makeHorseRig, makeHoverRig, makeRunnerRig, makeHair } from "./rigs.js";
 
 export { CITY, SURFACES, VEHICLES, VEHICLE_IDS, DIFFICULTY };
 
@@ -371,8 +371,6 @@ export class CityGame {
       legStand: new THREE.BoxGeometry(0.16, 0.76, 0.18),
       neck: new THREE.CylinderGeometry(0.072, 0.088, 0.15, 8),
       skull: new THREE.SphereGeometry(0.18, 10, 8),
-      hairTop: new THREE.SphereGeometry(0.188, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
-      hairNape: new THREE.SphereGeometry(0.188, 12, 8, Math.PI * 1.5 - 1.266, 2.532, Math.PI / 2 - 0.03, 0.58),
       eye: new THREE.SphereGeometry(0.03, 6, 6),
       arm: new THREE.CylinderGeometry(0.045, 0.045, 0.42, 8),
     };
@@ -421,7 +419,6 @@ export class CityGame {
       const p = new THREE.Group();
       p.position.set(x, 0, z); p.rotation.y = faceRot; parent.add(p);
       const shirt = lambert(SHIRTS[idx % SHIRTS.length]);
-      const hair = lambert(HAIR[(idx * 3 + 1) % HAIR.length]);
       const stand = pose === "stand";
       const yTorso = stand ? 1.02 : 0.72;
       if (stand) {
@@ -436,8 +433,8 @@ export class CityGame {
       put3(p, geo.torso, shirt, 0, yTorso, 0);
       put3(p, geo.neck, mat.skin, 0, yTorso + 0.28, 0);
       put3(p, geo.skull, mat.skin, 0, yTorso + 0.44, 0);
-      put3(p, geo.hairTop, hair, 0, yTorso + 0.46, -0.008);
-      put3(p, geo.hairNape, hair, 0, yTorso + 0.46, -0.008);
+      const hairG = makeHair(HAIR[(idx * 3 + 1) % HAIR.length], { r: 0.188, detail: "low" });
+      hairG.position.set(0, yTorso + 0.46, -0.008); p.add(hairG);
       put3(p, geo.eye, white, -0.06, yTorso + 0.47, 0.155);
       put3(p, geo.eye, white, 0.06, yTorso + 0.47, 0.155);
       if (stand) {
@@ -567,12 +564,9 @@ export class CityGame {
       neck.position.y = 1.35; upper.add(neck);
       const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 8), skin);
       head.position.y = 1.53; upper.add(head);
-      // 頭髮:上半球 + 後腦片(原本整顆頭是光的膚色球,從後面看最明顯——路人是滿街從各種角度看的)
-      const hairMat = lambert(HAIR[p.shirt % HAIR.length]);
-      const hair = new THREE.Mesh(new THREE.SphereGeometry(0.198, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), hairMat);
-      hair.position.y = 1.55; hair.scale.set(1, 1.05, 1.04); upper.add(hair);
-      const nape = new THREE.Mesh(new THREE.SphereGeometry(0.198, 12, 8, Math.PI * 1.5 - 1.266, 2.532, Math.PI / 2 - 0.03, 0.6), hairMat);
-      nape.position.y = 1.55; nape.scale.set(1, 1.05, 1.04); upper.add(nape);
+      // 頭髮:跟騎士同一支 makeHair(路人數量多,用 low 只做 3 片;輪廓一樣,省 draw call)
+      const hair = makeHair(HAIR[p.shirt % HAIR.length], { r: 0.198, detail: "low" });
+      hair.position.y = 1.55; upper.add(hair);
       for (const sx of [-1, 1]) {
         const eye = new THREE.Mesh(new THREE.SphereGeometry(0.032, 6, 6), new THREE.MeshBasicMaterial({ color: 0xffffff }));
         eye.position.set(sx * 0.06, 1.56, 0.16); upper.add(eye);
