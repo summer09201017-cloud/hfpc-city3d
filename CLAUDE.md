@@ -49,6 +49,10 @@
 - **街邊生活**:`buildStreetProps()` 產生路邊攤與露天座,**只擺人行道、不擋路**。
 - **道路細化**:緣石、斑馬線、停止線、雙黃線、路燈、紅綠燈,全部 `InstancedMesh`。
 - **今日路線**:`dailyRoute(todayKey())` 每天五站,場上一根金色光柱指著下一站。
+- **髮型**:`makeHair` / `makeHelmet`(rigs.js export),騎士、90 個路人、露天座客人共用同一支。
+  改造型只改那一支;五條頭頸鐵則見 skill `figure-head-neck-rules`。
+- **手機首頁斷言**:驗收會在 844×390 / 390×844 兩個尺寸、簡歷收合與全展開四種組合下,
+  量卡片上緣不可為負、捲到底「出發」要整顆在視窗內。首頁只會越加越長,這道守門別拿掉。
 
 ## 效能:這座城的三條線
 
@@ -92,7 +96,7 @@
 ```bash
 npm test            # 56 項:city 29 + drive 19 + voice 8
 npm run build
-npm run check:local # 85 項真瀏覽器驗收(playwright-core + 系統 Edge)
+npm run check:local # 97 項真瀏覽器驗收(playwright-core + 系統 Edge)
 node ~/.claude/skills/game-must-haves/scripts/check-must-haves.mjs .
 npx wrangler deploy --name hfpc-city3d --assets dist --compatibility-date 2026-07-01
 ```

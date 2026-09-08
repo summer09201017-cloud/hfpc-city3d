@@ -34,7 +34,7 @@ npm install
 npm run dev          # 本機開發
 npm test             # 56 項 node 測試(不需瀏覽器)
 npm run build
-npm run check:local  # 85 項真瀏覽器驗收
+npm run check:local  # 97 項真瀏覽器驗收
 npm run voice        # 重烤人聲 mp3(累加式,已有的跳過)
 ```
 
